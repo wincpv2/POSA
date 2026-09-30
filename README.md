@@ -1,38 +1,37 @@
 # POSA — Predictor of Obstructive Sleep Apnea
 
-A React Native (Expo) app that gives clinicians a workstation to upload a patient's ECG,
-run OSA (obstructive sleep apnea) risk prediction on it, and review the results.
+แอป React Native (Expo) ที่เป็นเวิร์กสเตชันให้แพทย์/บุคลากรห้องแล็บนอนหลับ อัปโหลดสัญญาณ ECG
+ของผู้ป่วย รันโมเดลทำนายความเสี่ยง OSA (obstructive sleep apnea) แล้วดูผลตรวจได้
 
-## Team
+## ทีม
 
-| Role | Person |
+| บทบาท | ชื่อ |
 |---|---|
 | UI/UX Designer | Pisit Pipathanabenjakul |
 | Researcher | Papangkorn Bennarong |
 | ML Engineer | Worraprach Srirattananon |
-| Mobile App Developer (frontend↔backend, storage/database) | Panut Anan |
+| Mobile App Developer (ต่อ frontend↔backend, storage/database) | Panut Anan |
 
 ## Tech stack
 
-- **App**: Expo / React Native, `expo-router` file-based routing
+- **แอป**: Expo / React Native, ระบบ routing แบบ file-based ของ `expo-router`
 - **Backend**: [Supabase](https://supabase.com) — Postgres, Auth, Storage, Row Level Security
-- **Auth**: Google OAuth via Supabase Auth
-- **ML**: CatBoost / XGBoost / CNN ensemble on ECG-derived features (RRI, EDR, CPC,
-  STFT/CWT), trained on PhysioNet Apnea-ECG, validated on UCDDB
+- **Auth**: Google OAuth ผ่าน Supabase Auth
+- **ML**: CatBoost / XGBoost / CNN ensemble บน feature ที่แปลงมาจาก ECG (RRI, EDR, CPC,
+  STFT/CWT) เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
 
-## Getting started
+## เริ่มต้นใช้งาน
 
-### 1. Install dependencies
+### 1. ติดตั้ง dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Set up environment variables
+### 2. ตั้งค่า environment variables
 
-Copy `.env.example` to `.env` and fill in the values from the Supabase dashboard
-(**Project Settings → Data API** for the URL, **Project Settings → API Keys** for
-the key):
+คัดลอก `.env.example` เป็น `.env` แล้วกรอกค่าจริงจาก Supabase dashboard
+(**Project Settings → Data API** สำหรับ URL, **Project Settings → API Keys** สำหรับ key):
 
 ```bash
 cp .env.example .env
@@ -43,22 +42,22 @@ EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon/publishable key>
 ```
 
-**Never use the `service_role` key here.** The app only ever uses the anon/publishable
-key, paired with Row Level Security — `service_role` bypasses RLS entirely and must
-never ship in client code. **Never commit `.env`** — it's git-ignored; `.env.example`
-is the only one that should be committed.
+**ห้ามใช้ `service_role` key ตรงนี้เด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ
+Row Level Security เท่านั้น — `service_role` เป็น key ที่ bypass RLS ทั้งหมด ห้ามอยู่ใน
+โค้ดฝั่ง client เด็ดขาด **ห้าม commit ไฟล์ `.env`** เข้า git (ถูก ignore ไว้แล้ว) —
+มีแค่ `.env.example` เท่านั้นที่ควร commit
 
-### 3. Run the app
+### 3. รันแอป
 
 ```bash
 npx expo start
 ```
 
-## Backend setup (Supabase)
+## ตั้งค่า Backend (Supabase)
 
-Migrations live in `supabase/migrations/` and are applied with the
-[Supabase CLI](https://supabase.com/docs/guides/cli) (no global install needed —
-`npx supabase` works directly):
+Migration ทั้งหมดอยู่ที่ `supabase/migrations/` ใช้
+[Supabase CLI](https://supabase.com/docs/guides/cli) รันได้เลยผ่าน `npx supabase`
+โดยไม่ต้องติดตั้งแยก:
 
 ```bash
 npx supabase login
@@ -66,43 +65,38 @@ npx supabase link --project-ref <your-project-ref>
 npx supabase db push
 ```
 
-Generate TypeScript types from the live schema after any migration change:
+Generate TypeScript types จาก schema จริงทุกครั้งที่มีการแก้ migration:
 
 ```bash
 npx supabase gen types typescript --linked > src/lib/database.types.ts
 ```
 
-### Schema overview
+### ภาพรวม Schema
 
-- `profiles` — a clinician's account (1:1 with `auth.users`), includes `consent_accepted`
-- `patients` — a shared patient identity (sex, date of birth, BMI) — not owned by any
-  single clinician
-- `clinician_patients` — join table: one row per clinician↔patient relationship
-  (subject code, notes). This is what lets multiple clinicians share a patient's
-  history — any clinician with an active link to a patient sees all of that
-  patient's studies, not just the ones they uploaded
-- `ecg_uploads` — one row per uploaded ECG study, file stored in the private
-  `ecg-files` Storage bucket
-- `models` — ML model registry (read-only to clinicians; writes are service-role only)
-- `predictions`, `prediction_minutes`, `sleep_sessions` — **not yet built**, waiting
-  on the ML team's output contract (label granularity, confidence score, time unit)
-- `audit_log` — provenance trail, service-role access only
+- `profiles` — บัญชีของแพทย์ (1:1 กับ `auth.users`) มี `consent_accepted` เก็บว่ายินยอมให้เก็บข้อมูลสุขภาพหรือยัง
+- `patients` — ตัวตนผู้ป่วยแบบใช้ร่วมกัน (sex, date of birth, BMI) — ไม่ได้เป็นของแพทย์คนใดคนหนึ่ง
+- `clinician_patients` — ตารางเชื่อม 1 แถวต่อความสัมพันธ์แพทย์↔ผู้ป่วย 1 คู่
+  (subject code, notes) — นี่คือจุดที่ทำให้แพทย์หลายคนแชร์ประวัติผู้ป่วยคนเดียวกันได้ —
+  แพทย์คนไหนก็ตามที่ผูกอยู่กับผู้ป่วยคนนั้น จะเห็นทุกการตรวจของผู้ป่วยคนนั้น ไม่ใช่แค่ที่ตัวเองอัปโหลด
+- `ecg_uploads` — 1 แถวต่อการตรวจ ECG 1 ครั้ง ไฟล์เก็บใน Storage bucket แบบ private ชื่อ `ecg-files`
+- `models` — ทะเบียนโมเดล ML (แพทย์อ่านได้อย่างเดียว เขียนได้แค่ผ่าน service-role)
+- `predictions`, `prediction_minutes`, `sleep_sessions` — **ยังไม่ได้สร้าง** รอ output
+  contract จากทีม ML (รูปแบบ label, มี confidence score ไหม, หน่วยเวลาที่ใช้)
+- `audit_log` — บันทึกประวัติการใช้งาน เข้าถึงได้แค่ผ่าน service-role
 
-All tables use Row Level Security. Clinical/audit tables (`patients`, `ecg_uploads`)
-use soft delete (`deleted_at`) instead of hard delete, to preserve an audit trail.
+ทุกตารางเปิด Row Level Security ตารางที่เป็นข้อมูลทางคลินิก/ประวัติ (`patients`, `ecg_uploads`)
+ใช้ soft delete (`deleted_at`) แทนการลบจริง เพื่อรักษา audit trail
 
-## Security notes
+## หมายเหตุด้านความปลอดภัย
 
-- RLS is the real access-control boundary — client-side filtering is convenience only.
-- `service_role` key never ships in the app; only the anon/publishable key does.
-- Secrets (`service_role` key, OAuth client secret, real patient data) must never
-  reach git. Run a git-history check for `.env` before any push if in doubt:
-  `git log --all --full-history -- .env` should return nothing.
-- The app must show the responsible-AI disclaimer and separate consent from login
-  before storing any health data (see `src/components/login-screen.tsx`).
+- RLS คือด่านความปลอดภัยตัวจริง — การกรองข้อมูลฝั่ง client เป็นแค่ความสะดวก ไม่ใช่การป้องกัน
+- `service_role` key ไม่อยู่ในแอปเด็ดขาด ใช้แค่ anon/publishable key เท่านั้น
+- ความลับ (service_role key, OAuth client secret, ข้อมูลผู้ป่วยจริง) ห้ามหลุดเข้า git
+  ถ้าไม่แน่ใจ เช็คด้วย: `git log --all --full-history -- .env` ต้องได้ผลว่างเปล่า
+- แอปต้องโชว์ข้อความ responsible-AI disclaimer และขอ consent แยกต่างหากจากการ login
+  ก่อนจะเก็บข้อมูลสุขภาพใดๆ (ดู `src/components/login-screen.tsx`)
 
-## Project status
+## สถานะโปรเจกต์
 
-See the team meeting summary for current progress, what's left, and open decisions
-(patient-login for read-only access, cross-clinician patient matching, and the
-Upload screen's patient-selection UI).
+ดูสรุปสำหรับที่ประชุมทีมสำหรับความคืบหน้าปัจจุบัน สิ่งที่เหลือ และประเด็นที่ยังต้องตัดสินใจ
+(การให้ผู้ป่วย login ดูผลตรวจแบบ read-only, การจับคู่ผู้ป่วยข้ามแพทย์, และ UI เลือกผู้ป่วยในหน้า Upload)
