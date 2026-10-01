@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { Link, type Href } from 'expo-router';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { type Href, useRouter } from 'expo-router';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 
 import { colors } from './posa-theme';
 
@@ -19,8 +19,9 @@ export function PageIntro({
   description: string;
   badge?: string;
 }) {
+  const { width } = useWindowDimensions();
   return (
-    <View style={ui.pageIntro}>
+    <View style={[ui.pageIntro, width < 640 && ui.pageIntroCompact]}>
       <View style={ui.pageIntroCopy}>
         <Text style={ui.eyebrow}>{eyebrow}</Text>
         <Text style={ui.pageTitle}>{title}</Text>
@@ -103,24 +104,31 @@ export function AppButton({
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
-  const button = (
+  const router = useRouter();
+  const buttonStyle = [
+    ui.button,
+    buttonVariants[variant],
+    compact && ui.buttonCompact,
+    disabled && ui.buttonDisabled,
+    style,
+  ];
+  const handlePress = () => {
+    onPress?.();
+    if (href) router.push(href);
+  };
+
+  return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={href ? 'link' : 'button'}
       disabled={disabled}
-      onPress={onPress}
+      onPress={onPress || href ? handlePress : undefined}
       style={({ pressed }) => StyleSheet.flatten([
-        ui.button,
-        buttonVariants[variant],
-        compact && ui.buttonCompact,
-        disabled && ui.buttonDisabled,
+        ...buttonStyle,
         pressed && !disabled && ui.buttonPressed,
-        style,
       ])}>
       {children}
     </Pressable>
   );
-
-  return href ? <Link href={href} asChild>{button}</Link> : button;
 }
 
 export function FormLabel({ children }: { children: ReactNode }) {
@@ -132,17 +140,20 @@ export const ui = StyleSheet.create({
     backgroundColor: colors.panel,
     borderColor: colors.border,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 20,
     padding: 20,
+    boxShadow: '0 8px 24px -4px rgba(6, 90, 130, 0.08), 0 2px 6px -1px rgba(6, 90, 130, 0.04)',
+    elevation: 2,
   },
   pageIntro: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     gap: 18,
-    marginBottom: 22,
+    marginBottom: 10,
   },
-  pageIntroCopy: { flex: 1, gap: 5 },
+  pageIntroCopy: { flex: 1, minWidth: 0, gap: 5 },
+  pageIntroCompact: { flexDirection: 'column', alignItems: 'flex-start', gap: 8 },
   eyebrow: {
     color: colors.mint,
     fontSize: 10,
@@ -152,23 +163,22 @@ export const ui = StyleSheet.create({
   },
   pageTitle: {
     color: colors.text,
-    fontFamily: 'Georgia',
     fontSize: 30,
-    lineHeight: 37,
+    lineHeight: 38,
     fontWeight: '700',
   },
   pageDescription: { color: colors.textSoft, fontSize: 14, lineHeight: 21, maxWidth: 720 },
   sectionTitleRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
     marginBottom: 16,
   },
-  sectionTitleCopy: { flex: 1, gap: 4 },
+  sectionTitleCopy: { flex: 1, minWidth: 120, gap: 4 },
   sectionTitle: {
     color: colors.text,
-    fontFamily: 'Georgia',
     fontSize: 18,
     lineHeight: 24,
     fontWeight: '700',
@@ -185,7 +195,7 @@ export const ui = StyleSheet.create({
   },
   pillDot: { width: 7, height: 7, borderRadius: 4 },
   pillText: { fontSize: 10, lineHeight: 14, fontWeight: '800', letterSpacing: 0.55 },
-  metricCard: { flex: 1, minWidth: 145, minHeight: 132, justifyContent: 'space-between' },
+  metricCard: { flex: 1, minWidth: 145, minHeight: 116, justifyContent: 'space-between' },
   metricLabel: { color: colors.textSoft, fontSize: 11, lineHeight: 16, fontWeight: '700', letterSpacing: 0.4 },
   metricValue: { fontSize: 30, lineHeight: 36, fontWeight: '800', fontVariant: ['tabular-nums'] },
   metricDetail: { color: colors.muted, fontSize: 11, lineHeight: 16 },
@@ -208,11 +218,11 @@ export const ui = StyleSheet.create({
 });
 
 const pillTones = StyleSheet.create({
-  mint: { backgroundColor: 'rgba(24, 213, 164, 0.12)' },
-  rose: { backgroundColor: 'rgba(255, 100, 136, 0.13)' },
-  amber: { backgroundColor: 'rgba(245, 199, 113, 0.13)' },
-  blue: { backgroundColor: 'rgba(117, 204, 244, 0.12)' },
-  neutral: { backgroundColor: 'rgba(160, 177, 207, 0.1)' },
+  mint: { backgroundColor: colors.mintSoft },
+  rose: { backgroundColor: colors.roseSoft },
+  amber: { backgroundColor: colors.amberSoft },
+  blue: { backgroundColor: colors.cyanSoft },
+  neutral: { backgroundColor: colors.panelRaised },
 });
 const pillDots = StyleSheet.create({
   mint: { backgroundColor: colors.mint },
@@ -234,8 +244,8 @@ const metricTones = StyleSheet.create({
   blue: { color: colors.cyan },
 });
 const buttonVariants = StyleSheet.create({
-  primary: { backgroundColor: colors.mint, borderColor: colors.mint },
+  primary: { backgroundColor: colors.cyan, borderColor: colors.cyan },
   secondary: { backgroundColor: colors.panelRaised, borderColor: colors.border },
   quiet: { backgroundColor: 'transparent', borderColor: colors.border },
-  danger: { backgroundColor: 'rgba(168, 23, 73, 0.15)', borderColor: 'rgba(255, 100, 136, 0.24)' },
+  danger: { backgroundColor: colors.roseSoft, borderColor: colors.rose },
 });

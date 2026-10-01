@@ -88,6 +88,13 @@ export default function ProcessingScreen() {
             <View style={styles.connectionRow}><Text style={styles.connectionLabel}>Lead disconnect state</Text><Text style={styles.connectionValue}>NOT CONNECTED</Text></View>
           </Surface>
 
+          <View style={styles.actions}>
+            <AppButton href="/detail" style={styles.actionButton}>
+              <Text style={styles.primaryActionText}>Open detail screen  →</Text>
+            </AppButton>
+            <Link href="/upload" style={styles.backLink}>←  Return to data ingestion</Link>
+          </View>
+
           <Surface style={styles.modelPanel}>
             <SectionTitle title="Model architecture" subtitle="Backend service slot" right={<Pill label="NOT CONNECTED" tone="amber" />} />
             <Text style={styles.modelLabel}>PLANNED PIPELINE</Text>
@@ -96,13 +103,6 @@ export default function ProcessingScreen() {
             <Text style={styles.modelLabel}>MODEL METRICS</Text>
             <Text style={styles.modelPending}>Evaluation scores will be supplied by your backend.</Text>
           </Surface>
-
-          <View style={styles.actions}>
-            <AppButton href="/detail" style={styles.actionButton}>
-              <Text style={styles.primaryActionText}>Open detail screen  →</Text>
-            </AppButton>
-            <Link href="/upload" style={styles.backLink}>←  Return to data ingestion</Link>
-          </View>
         </View>
       </View>
     </ScrollView>
@@ -121,22 +121,22 @@ function Stat({ label, value, note, accent = false }: { label: string; value: st
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 28, paddingTop: 28, paddingBottom: 42, gap: 16 },
-  studyBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: '#17243B' },
-  bannerMark: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(103, 245, 195, 0.11)' },
+  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 42, gap: 16 },
+  studyBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: colors.cyanSoft },
+  bannerMark: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.mintSoft },
   bannerMarkText: { color: colors.mint, fontSize: 22 },
   bannerCopy: { flex: 1, gap: 7 },
   bannerBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  bannerTitle: { color: colors.text, fontFamily: 'Georgia', fontSize: 17, fontWeight: '700' },
+  bannerTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
   bannerText: { color: colors.textSoft, fontSize: 11, lineHeight: 17 },
   grid: { gap: 15 },
   gridWide: { flexDirection: 'row', alignItems: 'flex-start' },
   mainColumn: { flex: 1.25, gap: 15, minWidth: 0 },
-  sideColumn: { flex: 1, minWidth: 280, gap: 15 },
+  sideColumn: { flex: 1, minWidth: 0, gap: 15 },
   progressPanel: { minHeight: 370 },
   progressVersion: { color: colors.mint, fontSize: 10, fontWeight: '800' },
   progressContent: { flex: 1, alignItems: 'center', justifyContent: 'space-around', gap: 19, paddingVertical: 8 },
-  progressRing: { width: 178, height: 178, borderRadius: 90, borderWidth: 8, borderColor: colors.mintDeep, alignItems: 'center', justifyContent: 'center', shadowColor: colors.mint, shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 0 } },
+  progressRing: { width: 178, height: 178, borderRadius: 90, borderWidth: 8, borderColor: colors.mintDeep, alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 16px rgba(0, 107, 86, 0.12)' },
   progressRingInner: { alignItems: 'center', gap: 2 },
   progressNumber: { color: colors.text, fontSize: 34, lineHeight: 38, fontWeight: '800', fontVariant: ['tabular-nums'] },
   progressLabel: { color: colors.mint, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
@@ -152,8 +152,8 @@ const styles = StyleSheet.create({
   channelLabel: { color: colors.textSoft, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   channelStatus: { color: colors.mint, fontSize: 9, fontWeight: '700' },
   channelPlaceholder: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 10, backgroundColor: colors.panelDeep, borderRadius: 7 },
-  channelPlaceholderGlyph: { color: 'rgba(103, 245, 195, 0.55)', fontSize: 12, letterSpacing: 1 },
-  channelPlaceholderText: { color: colors.muted, fontSize: 9 },
+  channelPlaceholderGlyph: { color: colors.mintDeep, fontSize: 12, letterSpacing: 1 },
+  channelPlaceholderText: { color: '#B6CBD4', fontSize: 9 },
   telemetryPanel: { gap: 5 },
   utcLabel: { color: colors.muted, fontSize: 9, fontWeight: '700', letterSpacing: 0.6 },
   logList: { backgroundColor: colors.backgroundSoft, borderRadius: 9, overflow: 'hidden' },
@@ -179,6 +179,6 @@ const styles = StyleSheet.create({
   modelPending: { color: colors.textSoft, fontSize: 10, lineHeight: 16 },
   actions: { alignItems: 'center', gap: 11 },
   actionButton: { width: '100%' },
-  primaryActionText: { color: '#06271F', fontSize: 12, fontWeight: '800' },
+  primaryActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   backLink: { color: colors.textSoft, fontSize: 10, fontWeight: '700' },
 });

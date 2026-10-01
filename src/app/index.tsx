@@ -1,4 +1,5 @@
 import { Link } from 'expo-router';
+import { Image } from 'expo-image';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { AppButton, MetricCard, PageIntro, Pill, SectionTitle, Surface } from '@/components/posa-ui';
@@ -26,14 +27,22 @@ export default function HomeScreen() {
       />
 
       <Surface style={styles.welcomeCard}>
-        <View style={styles.welcomeCopy}>
-          <Text style={styles.welcomeEyebrow}>SLEEP MEDICINE WORKSPACE</Text>
-          <Text style={styles.welcomeTitle}>Good morning, Dr. Thorne</Text>
-          <Text style={styles.welcomeText}>Review a sample study or start a new physiological upload.</Text>
+        <View style={[styles.welcomeContent, !desktop && styles.welcomeContentCompact]}>
+          <View style={styles.welcomeCopy}>
+            <Text style={styles.welcomeEyebrow}>SLEEP MEDICINE WORKSPACE</Text>
+            <Text style={styles.welcomeTitle}>Good morning, Dr. Thorne</Text>
+            <Text style={styles.welcomeText}>Review a sample study or start a new physiological upload.</Text>
+            <AppButton href="/upload" style={styles.welcomeAction}>
+              <Text style={styles.primaryButtonText}>＋  Start a new study</Text>
+            </AppButton>
+          </View>
+          <Image
+            source={require('../../assets/illustrations/sleeping-patient.png')}
+            contentFit="contain"
+            accessibilityLabel="Illustration of a patient sleeping comfortably"
+            style={[styles.welcomeImage, !desktop && styles.welcomeImageCompact]}
+          />
         </View>
-        <AppButton href="/upload" style={styles.welcomeAction}>
-          <Text style={styles.primaryButtonText}>＋  Start a new study</Text>
-        </AppButton>
       </Surface>
 
       <View style={[styles.metricRow, !desktop && styles.metricRowCompact]}>
@@ -97,26 +106,30 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 28, paddingTop: 28, paddingBottom: 40, gap: 17 },
-  welcomeCard: { minHeight: 146, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 20, backgroundColor: '#17243B', paddingHorizontal: 24, paddingVertical: 23 },
+  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40, gap: 16 },
+  welcomeCard: { backgroundColor: colors.cyanSoft, padding: 22 },
+  welcomeContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 20 },
+  welcomeContentCompact: { flexDirection: 'column', alignItems: 'stretch', gap: 12 },
   welcomeCopy: { flex: 1, gap: 7 },
-  welcomeEyebrow: { color: colors.mint, fontSize: 9, fontWeight: '800', letterSpacing: 1.25 },
-  welcomeTitle: { color: colors.text, fontFamily: 'Georgia', fontSize: 25, fontWeight: '700' },
+  welcomeEyebrow: { color: colors.cyan, fontSize: 9, fontWeight: '800', letterSpacing: 1.25 },
+  welcomeTitle: { color: colors.text, fontSize: 25, lineHeight: 32, fontWeight: '800' },
   welcomeText: { color: colors.textSoft, fontSize: 13, lineHeight: 19 },
-  welcomeAction: { minWidth: 178 },
-  primaryButtonText: { color: '#06271F', fontSize: 12, fontWeight: '800' },
+  welcomeAction: { minWidth: 178, alignSelf: 'flex-start', marginTop: 5, backgroundColor: colors.cyan, borderColor: colors.cyan },
+  welcomeImage: { width: 182, height: 142 },
+  welcomeImageCompact: { width: 210, height: 145, alignSelf: 'center' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   metricRow: { flexDirection: 'row', gap: 12 },
   metricRowCompact: { flexWrap: 'wrap' },
   lowerGrid: { gap: 14 },
   lowerGridWide: { flexDirection: 'row', alignItems: 'stretch' },
-  cohortCard: { flex: 1, minWidth: 280 },
-  recordsCard: { flex: 1.25, minWidth: 320 },
+  cohortCard: { flex: 1, minWidth: 0 },
+  recordsCard: { flex: 1.25, minWidth: 0 },
   cohortInfo: { minHeight: 96, flexDirection: 'row', alignItems: 'center', gap: 17, paddingVertical: 7 },
-  cohortMark: { width: 78, height: 78, borderRadius: 18, backgroundColor: colors.panelDeep, borderColor: colors.border, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  cohortMark: { width: 78, height: 78, borderRadius: 18, backgroundColor: colors.cyanSoft, borderColor: colors.border, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
   cohortMarkText: { color: colors.mint, fontSize: 27, lineHeight: 32, fontWeight: '800' },
   cohortMarkCaption: { color: colors.muted, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
   cohortText: { flex: 1, gap: 7 },
-  cohortTitle: { color: colors.text, fontFamily: 'Georgia', fontSize: 16, fontWeight: '700' },
+  cohortTitle: { color: colors.text, fontSize: 16, fontWeight: '800' },
   cohortDescription: { color: colors.textSoft, fontSize: 12, lineHeight: 18 },
   cohortFooter: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 13, marginTop: 9 },
   cohortFooterText: { color: colors.muted, fontSize: 10 },

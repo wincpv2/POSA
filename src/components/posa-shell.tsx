@@ -22,7 +22,7 @@ export default function PosaShell() {
       <View style={styles.root}>
         {isDesktop ? <DesktopSidebar pathname={pathname} /> : null}
         <View style={styles.mainColumn}>
-          <View style={styles.topbar}>
+          <View style={[styles.topbar, width < 400 && styles.topbarCompact]}>
             <View style={styles.mobileBrand}>
               <View style={styles.brandMark}><Text style={styles.brandGlyph}>∿</Text></View>
               <View>
@@ -136,13 +136,13 @@ const styles = StyleSheet.create({
   brandMarkLarge: { width: 43, height: 43, borderRadius: 13, backgroundColor: colors.panelRaised, alignItems: 'center', justifyContent: 'center' },
   brandGlyph: { color: colors.mint, fontSize: 25, fontWeight: '700', lineHeight: 29 },
   brandNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  brandName: { color: colors.text, fontFamily: 'Georgia', fontWeight: '700', fontSize: 17 },
-  brandCode: { color: colors.mint, backgroundColor: 'rgba(24, 213, 164, 0.12)', borderRadius: 5, overflow: 'hidden', paddingVertical: 2, paddingHorizontal: 6, fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  brandName: { color: colors.text, fontWeight: '800', fontSize: 17 },
+  brandCode: { color: colors.mint, backgroundColor: colors.mintSoft, borderRadius: 5, overflow: 'hidden', paddingVertical: 2, paddingHorizontal: 6, fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
   brandCaption: { marginTop: 4, color: colors.textSoft, fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
   navCaption: { color: colors.muted, fontSize: 9, letterSpacing: 1.4, fontWeight: '800', paddingHorizontal: 10, marginBottom: 11 },
   navList: { gap: 5 },
   sideNavItem: { minHeight: 57, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 11, borderRadius: 11, position: 'relative', overflow: 'hidden' },
-  sideNavItemActive: { backgroundColor: 'rgba(103, 245, 195, 0.09)' },
+  sideNavItemActive: { backgroundColor: colors.cyanSoft },
   navMark: { width: 22, textAlign: 'center', color: colors.muted, fontSize: 19, fontWeight: '700' },
   navMarkActive: { color: colors.mint },
   navText: { gap: 3 },
@@ -159,6 +159,7 @@ const styles = StyleSheet.create({
   sidebarFooter: { color: colors.muted, fontSize: 8, letterSpacing: 1, textAlign: 'center' },
   mainColumn: { flex: 1, minWidth: 0, backgroundColor: colors.background },
   topbar: { height: 68, paddingHorizontal: 24, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.backgroundSoft },
+  topbarCompact: { height: 62, paddingHorizontal: 14 },
   mobileBrand: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   topbarMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1, gap: 18 },
   breadcrumb: { color: colors.muted, fontSize: 10, fontWeight: '700', letterSpacing: 1.1 },
@@ -166,8 +167,8 @@ const styles = StyleSheet.create({
   caseMetaText: { alignItems: 'flex-end', gap: 3 },
   caseMetaTitle: { color: colors.textSoft, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
   caseMetaSub: { color: colors.muted, fontSize: 10, fontVariant: ['tabular-nums'] },
-  avatar: { width: 34, height: 34, borderRadius: 18, backgroundColor: colors.mint, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: colors.background, fontFamily: 'Georgia', fontSize: 16, fontWeight: '700' },
+  avatar: { width: 34, height: 34, borderRadius: 18, backgroundColor: colors.cyanSoft, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: colors.cyan, fontSize: 16, fontWeight: '800' },
   routeContainer: { flex: 1, minHeight: 0 },
   mobileTabs: { minHeight: 67, paddingBottom: 5, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.backgroundSoft, justifyContent: 'center' },
   mobileTabsInner: { flexGrow: 1, justifyContent: 'space-around', alignItems: 'center', paddingHorizontal: 5 },

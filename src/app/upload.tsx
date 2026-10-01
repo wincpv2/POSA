@@ -90,6 +90,16 @@ export default function UploadScreen() {
             <Text style={styles.localNote}>JPG · PNG · HEIC on mobile  /  .dat · .hea · .edf · image on web</Text>
           </Surface>
 
+          <View style={styles.runActions}>
+            <AppButton
+              disabled={!fileName}
+              onPress={() => router.push('/processing')}
+              style={styles.runButton}>
+              <Text style={styles.primaryButtonText}>◉  Preview analysis workflow  →</Text>
+            </AppButton>
+            <Text style={styles.runNote}>{fileName ? 'Prototype navigation only. No file is transmitted or analyzed.' : 'Select a local file or load the sample record to continue.'}</Text>
+          </View>
+
           <Surface style={styles.optionsPanel}>
             <SectionTitle title="Signal calibration" subtitle="Set the defaults shown in the analysis workspace" right={<Pill label="AUTO-CALIBRATED" />} />
             <FormLabel>LEAD CONFIGURATION</FormLabel>
@@ -127,15 +137,6 @@ export default function UploadScreen() {
             </View>
           </Surface>
 
-          <View style={styles.runActions}>
-            <AppButton
-              disabled={!fileName}
-              onPress={() => router.push('/processing')}
-              style={styles.runButton}>
-              <Text style={styles.primaryButtonText}>◉  Preview analysis workflow  →</Text>
-            </AppButton>
-            <Text style={styles.runNote}>{fileName ? 'Prototype navigation only. No file is transmitted or analyzed.' : 'Select a local file or load the sample record to continue.'}</Text>
-          </View>
         </View>
 
         <View style={styles.sideColumn}>
@@ -192,15 +193,15 @@ function Pending({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 28, paddingTop: 28, paddingBottom: 42, gap: 17 },
+  page: { width: '100%', maxWidth: 1320, alignSelf: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 42, gap: 16 },
   columns: { gap: 15 },
   columnsWide: { flexDirection: 'row', alignItems: 'flex-start' },
   primaryColumn: { flex: 1.65, gap: 15, minWidth: 0 },
-  sideColumn: { flex: 1, minWidth: 270, gap: 15 },
-  uploadPanel: { minHeight: 285, alignItems: 'center', justifyContent: 'center', paddingVertical: 25, backgroundColor: colors.panelDeep },
-  uploadIcon: { width: 58, height: 58, borderRadius: 30, backgroundColor: 'rgba(103, 245, 195, 0.13)', alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
+  sideColumn: { flex: 1, minWidth: 0, gap: 15 },
+  uploadPanel: { minHeight: 250, alignItems: 'center', justifyContent: 'center', paddingVertical: 25, backgroundColor: colors.cyanSoft, borderStyle: 'dashed', borderColor: '#9BCBD8' },
+  uploadIcon: { width: 54, height: 54, borderRadius: 27, backgroundColor: colors.mintSoft, alignItems: 'center', justifyContent: 'center', marginBottom: 13 },
   uploadIconText: { color: colors.mint, fontSize: 33, fontWeight: '700', lineHeight: 37 },
-  uploadTitle: { color: colors.text, fontFamily: 'Georgia', fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  uploadTitle: { color: colors.text, fontSize: 19, fontWeight: '800', textAlign: 'center' },
   uploadCopy: { color: colors.textSoft, fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 6, maxWidth: 430 },
   formatList: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 12 },
   formatChip: { color: colors.textSoft, backgroundColor: colors.panelRaised, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
@@ -211,7 +212,7 @@ const styles = StyleSheet.create({
   quietButtonText: { color: colors.textSoft, fontSize: 11, fontWeight: '700' },
   localNote: { color: colors.muted, textAlign: 'center', fontSize: 9, lineHeight: 14, marginTop: 13 },
   selectedFile: { width: '100%', maxWidth: 490, minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 15, padding: 9, borderRadius: 10, backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 1 },
-  fileGlyph: { width: 34, height: 34, borderRadius: 8, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(103, 245, 195, 0.12)' },
+  fileGlyph: { width: 34, height: 34, borderRadius: 8, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.mintSoft },
   fileGlyphText: { color: colors.mint, fontSize: 8, fontWeight: '800' },
   selectedFileCopy: { flex: 1, minWidth: 0, gap: 3 },
   selectedFileName: { color: colors.text, fontSize: 11, fontWeight: '700' },
@@ -222,7 +223,7 @@ const styles = StyleSheet.create({
   optionsPanel: { gap: 12 },
   segmentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 7 },
   option: { flex: 1, minWidth: 116, minHeight: 37, paddingHorizontal: 9, paddingVertical: 8, borderRadius: 9, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.backgroundSoft, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 },
-  optionActive: { borderColor: 'rgba(103, 245, 195, 0.2)', backgroundColor: 'rgba(103, 245, 195, 0.09)' },
+  optionActive: { borderColor: colors.cyan, backgroundColor: colors.cyanSoft },
   optionCompact: { minWidth: 72, minHeight: 34, flex: 1 },
   optionDot: { width: 6, height: 6, borderRadius: 4, backgroundColor: colors.mint },
   optionText: { color: colors.textSoft, fontSize: 10, fontWeight: '700' },
@@ -237,20 +238,20 @@ const styles = StyleSheet.create({
   input: { minHeight: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 10, color: colors.text, backgroundColor: colors.backgroundSoft, fontSize: 11 },
   runActions: { alignItems: 'center', gap: 8 },
   runButton: { width: '100%', minHeight: 52 },
-  primaryButtonText: { color: '#06271F', fontSize: 12, fontWeight: '800' },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   runNote: { color: colors.muted, textAlign: 'center', fontSize: 10, lineHeight: 15 },
   qualityPanel: { gap: 12 },
   emptySignal: { minHeight: 198, justifyContent: 'center', alignItems: 'center', overflow: 'hidden', position: 'relative', borderRadius: 11, backgroundColor: colors.panelDeep, borderWidth: 1, borderColor: colors.border, padding: 18 },
-  emptySignalGrid: { ...StyleSheet.absoluteFill, opacity: 0.45, backgroundColor: 'transparent', borderColor: 'rgba(117, 204, 244, 0.05)', borderWidth: 1 },
-  emptySignalMark: { color: colors.muted, fontSize: 30, lineHeight: 35, opacity: 0.5 },
-  emptySignalTitle: { color: colors.textSoft, fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 9 },
-  emptySignalCopy: { maxWidth: 240, color: colors.muted, textAlign: 'center', fontSize: 10, lineHeight: 15, marginTop: 5 },
+  emptySignalGrid: { ...StyleSheet.absoluteFill, opacity: 0.45, backgroundColor: 'transparent', borderColor: 'rgba(0, 210, 255, 0.12)', borderWidth: 1 },
+  emptySignalMark: { color: '#00C49F', fontSize: 30, lineHeight: 35, opacity: 0.75 },
+  emptySignalTitle: { color: '#EAF7FA', fontSize: 12, fontWeight: '700', textAlign: 'center', marginTop: 9 },
+  emptySignalCopy: { maxWidth: 240, color: '#B6CBD4', textAlign: 'center', fontSize: 10, lineHeight: 15, marginTop: 5 },
   pendingRows: { gap: 3 },
   pendingRow: { minHeight: 34, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
   pendingLabel: { color: colors.textSoft, fontSize: 10 },
   pendingValue: { color: colors.muted, fontSize: 10, fontWeight: '700' },
-  privacyPanel: { flexDirection: 'row', gap: 11, backgroundColor: 'rgba(117, 204, 244, 0.07)' },
-  privacyIcon: { width: 25, height: 25, borderRadius: 13, backgroundColor: 'rgba(117, 204, 244, 0.15)', alignItems: 'center', justifyContent: 'center' },
+  privacyPanel: { flexDirection: 'row', gap: 11, backgroundColor: colors.cyanSoft },
+  privacyIcon: { width: 25, height: 25, borderRadius: 13, backgroundColor: '#D0EEF6', alignItems: 'center', justifyContent: 'center' },
   privacyIconText: { color: colors.cyan, fontSize: 13, fontWeight: '800' },
   privacyCopy: { flex: 1, gap: 5 },
   privacyTitle: { color: colors.cyan, fontSize: 11, fontWeight: '800' },
