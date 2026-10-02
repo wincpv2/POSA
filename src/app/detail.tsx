@@ -1,249 +1,125 @@
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import Picker from '@expo/ui/community/picker';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
+import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
+import { useUploadState } from '@/components/posa-state';
+import { colors, fonts } from '@/components/posa-theme';
 
-import { AppButton, PageIntro, Pill, SectionTitle, Surface } from '@/components/posa-ui';
-import { colors } from '@/components/posa-theme';
-
-const intervals = [
-  { start: '00:42:00', end: '00:47:00', duration: '5m' },
-  { start: '00:49:00', end: '01:29:00', duration: '40m' },
-  { start: '01:40:00', end: '01:56:00', duration: '16m' },
-  { start: '03:03:00', end: '03:25:00', duration: '22m' },
-  { start: '03:53:00', end: '04:01:00', duration: '8m' },
-];
-const macroSegments = [9, 8, 5, 10, 11, 7, 6, 10, 5, 8, 7, 9, 6, 8, 10, 6, 11, 5, 8, 7, 10, 6, 9, 8];
+const plot = { left: 78, right: 980, top: 46, bottom: 420 };
+const eventRed = '#D1495B';
+const seconds = (value: string) => value.split(':').reduce((n, part) => n * 60 + Number(part), 0);
+const timeLabel = (n: number) => { const s = Math.max(0, Math.floor(n)); return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 
 export default function DetailScreen() {
   const { width } = useWindowDimensions();
-  const wide = width >= 1020;
-  const [activeEvent, setActiveEvent] = useState(2);
-  const [streaming, setStreaming] = useState(true);
-  const [speed, setSpeed] = useState('1.0×');
+  const wide = width >= 900;
+  const { study } = useUploadState();
+  const params = useLocalSearchParams<{ time?: string }>();
+  const sample = study.metadata.includes('Sample record');
+  const durationSeconds = study.duration ? seconds(study.duration) : 8 * 3600 + 30 * 60;
+  const requested = Number(params.time);
+  const [current, setCurrent] = useState(Number.isFinite(requested) ? Math.max(0, Math.min(durationSeconds, requested)) : 5);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState('1');
+  const [signal, setSignal] = useState('Filtered');
+  const [windowSize, setWindowSize] = useState('2.5');
   const [zoom, setZoom] = useState(1);
-  const [filterActive, setFilterActive] = useState(true);
+  const [chartWidth, setChartWidth] = useState(1);
+  const [timelineWidth, setTimelineWidth] = useState(1);
+  const visibleSeconds = Number(windowSize) / zoom;
+  const start = Math.max(0, Math.min(durationSeconds - visibleSeconds, current - visibleSeconds / 2));
+  const end = start + visibleSeconds;
+  const rrInterval = 640;
+  const heartRate = sample ? 95 : 0;
+  const peaks = useMemo(() => {
+    const result: { time: number; x: number; y: number }[] = [];
+    for (let t = Math.ceil(start / (rrInterval / 1000)) * (rrInterval / 1000); t <= end; t += rrInterval / 1000) {
+      const phase = (t * 1000 % rrInterval) / rrInterval;
+      const value = -0.22 + Math.exp(-Math.pow((phase - 0.36) / 0.035, 2)) * 2.95;
+      result.push({ time: t, x: plot.left + (t - start) / visibleSeconds * (plot.right - plot.left), y: plot.bottom - (value + 0.6) * 80 });
+    }
+    return result;
+  }, [start, end, visibleSeconds]);
+  const wavePath = useMemo(() => {
+    const count = 340;
+    return Array.from({ length: count }, (_, index) => {
+      const x = plot.left + index / (count - 1) * (plot.right - plot.left);
+      const t = start + index / (count - 1) * visibleSeconds;
+      const phase = (t * 1000 % rrInterval) / rrInterval;
+      const qrs = Math.exp(-Math.pow((phase - 0.36) / 0.035, 2)) * 2.95;
+      const p = Math.exp(-Math.pow((phase - 0.16) / 0.08, 2)) * 0.22;
+      const tWave = Math.exp(-Math.pow((phase - 0.68) / 0.13, 2)) * 0.34;
+      const value = -0.22 + Math.sin(t * 2.4) * 0.06 + p + qrs + tWave;
+      const y = plot.bottom - (value + 0.6) * 80;
+      return `${index ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
+    }).join(' ');
+  }, [start, visibleSeconds]);
+  useEffect(() => {
+    if (!playing) return;
+    const timer = setInterval(() => setCurrent((value) => Math.min(durationSeconds, value + 0.25 * Number(speed))), 250);
+    return () => clearInterval(timer);
+  }, [playing, speed, durationSeconds]);
+  useEffect(() => { if (current >= durationSeconds) setPlaying(false); }, [current, durationSeconds]);
+  useEffect(() => { if (Number.isFinite(requested)) setCurrent(Math.max(0, Math.min(durationSeconds, requested))); }, [params.time]);
 
-  const stepEvent = (delta: number) => setActiveEvent((value) => (value + delta + intervals.length) % intervals.length);
+  const moveEvent = (direction: -1 | 1) => {
+    const event = direction > 0
+      ? study.events.find((item) => seconds(item.start) > current)
+      : [...study.events].reverse().find((item) => seconds(item.start) < current);
+    if (event) setCurrent(seconds(event.start));
+  };
+  const seekPlot = (x: number) => setCurrent(Math.max(0, Math.min(durationSeconds, start + x / chartWidth * visibleSeconds)));
+  const seekNight = (x: number) => setCurrent(Math.max(0, Math.min(durationSeconds, x / timelineWidth * durationSeconds)));
 
-  return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
-      <PageIntro
-        eyebrow="STUDY REVIEW · DEMO VALUES"
-        title="Signal detail"
-        description="Review controls and event navigation for a sample study. The signal canvas contains no ECG data."
-        badge="Example study"
-      />
+  if (study.status !== 'ready') return <View style={styles.gate}><Text style={styles.title}>No completed study to inspect</Text><Text style={styles.copy}>Upload a recording and finish the preview first.</Text><AppButton href="/upload"><Text style={styles.buttonText}>Go to upload</Text></AppButton></View>;
 
-      <Surface style={styles.summaryStrip}>
-        <View style={styles.summaryIdentity}>
-          <View style={styles.studyAvatar}><Text style={styles.studyAvatarText}>x07</Text></View>
-          <View>
-            <Text style={styles.studyId}>REC-8842-PT</Text>
-            <Text style={styles.studyMeta}>8.5 h record · sample case</Text>
-          </View>
-          <Pill label="APNEA · A" tone="rose" />
+  return <ScrollView style={styles.scroll} contentContainerStyle={[styles.page, wide && styles.pageWide]}>
+    <View style={styles.playerHeader}><View style={styles.timeRow}><Text style={styles.clock}>{timeLabel(current)} / {timeLabel(durationSeconds)}</Text><Text style={styles.heartRate}>{sample ? `HR ${heartRate} bpm` : 'HR —'}</Text></View><View style={[styles.classification, !sample && styles.classificationUnavailable]}><Text style={styles.classificationText}>{sample ? '✓ NORMAL · N' : 'Model output unavailable'}</Text></View></View>
+    <View style={styles.controls}>
+      <Control label={playing ? 'Pause' : 'Play'} onPress={() => setPlaying((value) => !value)} active={playing} disabled={!sample}/>
+      <Text style={styles.controlLabel}>Speed</Text><Picker enabled={sample} selectedValue={speed} onValueChange={(value) => setSpeed(String(value))} style={styles.picker}>{['0.5','1','2'].map((value) => <Picker.Item key={value} value={value} label={`${value}×`}/>)}</Picker>
+      <Text style={styles.controlLabel}>Signal</Text><Picker enabled={sample} selectedValue={signal} onValueChange={(value) => setSignal(String(value))} style={styles.picker}>{['Filtered','Raw'].map((value) => <Picker.Item key={value} value={value} label={value}/>)}</Picker>
+    </View>
+    <View style={[styles.controls, styles.viewControls]}>
+      <Control label={`Zoom in ×${zoom}`} onPress={() => setZoom((value) => Math.min(4, value + 1))} disabled={!sample || zoom === 4}/>
+      <Control label="Zoom out" onPress={() => setZoom((value) => Math.max(1, value - 1))} disabled={!sample || zoom === 1}/>
+      <Text style={styles.controlLabel}>Window</Text><Picker enabled={sample} selectedValue={windowSize} onValueChange={(value) => setWindowSize(String(value))} style={styles.picker}>{['2.5','5','10'].map((value) => <Picker.Item key={value} value={value} label={`${value} s`}/>)}</Picker>
+      <View style={styles.eventNav}><Control label="Previous apnea" onPress={() => moveEvent(-1)} disabled={!sample || !study.events.length || current <= seconds(study.events[0].start)}/><Control label="Next apnea" onPress={() => moveEvent(1)} disabled={!sample || !study.events.length || current >= seconds(study.events[study.events.length - 1].start)}/></View>
+    </View>
+    {sample ? <>
+      <GlassPanel style={styles.chartPanel}>
+        <View style={styles.chartHead}><Text style={styles.chartTitle}>{signal.toUpperCase()} ECG · red = apnea · cyan = R-peak</Text><Text style={styles.rr}>Previous R-R: {rrInterval} ms · Next R-R: {rrInterval} ms</Text></View>
+        <Pressable accessibilityRole="image" accessibilityLabel={`${signal} ECG waveform. Tap to seek within the current elapsed-time window.`} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} onPress={(event) => seekPlot(event.nativeEvent.locationX)} style={[styles.chartTouch,{height:wide?Math.min(580,width*0.33):350}]}>
+          <Svg width="100%" height="100%" viewBox="0 0 1000 520" preserveAspectRatio="none">
+            <Rect x="0" y="0" width="1000" height="520" fill="#061417"/>
+            {Array.from({ length: 19 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * 20} y2={plot.top + index * 20} stroke={index % 4 === 0 ? '#28434a' : '#152c31'} strokeWidth={index % 4 === 0 ? 1.2 : 0.7}/>)}
+            {Array.from({ length: 13 }, (_, index) => <Line key={`v${index}`} x1={plot.left + index * (plot.right - plot.left) / 12} x2={plot.left + index * (plot.right - plot.left) / 12} y1={plot.top} y2={plot.bottom} stroke={index % 4 === 0 ? '#28434a' : '#152c31'} strokeWidth={index % 4 === 0 ? 1.2 : 0.7}/>)}
+            {study.events.map((event) => { const a = seconds(event.start), b = seconds(event.end); if (b < start || a > end) return null; const x1 = plot.left + (Math.max(a,start)-start)/visibleSeconds*(plot.right-plot.left); const x2 = plot.left + (Math.min(b,end)-start)/visibleSeconds*(plot.right-plot.left); return <Rect key={event.id} x={x1} y={plot.top} width={Math.max(1,x2-x1)} height={plot.bottom-plot.top} fill={eventRed} fillOpacity={0.28}/>; })}
+            <Path d={wavePath} fill="none" stroke={signal === 'Filtered' ? '#32E6A6' : '#71D9F2'} strokeWidth={2.4}/>
+            {peaks.map((peak, index) => <Circle key={index} cx={peak.x} cy={peak.y} r={Math.abs(peak.time-current) < rrInterval / 2000 ? 5.5 : 4} fill={Math.abs(peak.time-current) < rrInterval / 2000 ? '#FFD166' : 'transparent'} stroke={Math.abs(peak.time-current) < rrInterval / 2000 ? '#FFD166' : '#54E7E8'} strokeWidth={1.8}/>)}
+            <Line x1={plot.left+(current-start)/visibleSeconds*(plot.right-plot.left)} x2={plot.left+(current-start)/visibleSeconds*(plot.right-plot.left)} y1={plot.top} y2={plot.bottom} stroke="#CAF0F8" strokeWidth={1.2}/>
+            {Array.from({ length: 5 }, (_, index) => { const t = start + index * visibleSeconds / 4; const x = plot.left + index * (plot.right-plot.left) / 4; return <SvgText key={index} x={x} y={plot.bottom+23} fill="#CAF0F8" fontSize="13" textAnchor="middle">{timeLabel(t)}</SvgText>; })}
+            <SvgText x={plot.left} y={28} fill="#CAF0F8" fontSize="15">{signal.toUpperCase()} ECG · red = apnea</SvgText>
+            <SvgText x={30} y={235} fill="#CAF0F8" fontSize="13" transform="rotate(-90 30 235)" textAnchor="middle">ECG (mV)</SvgText>
+          </Svg>
+        </Pressable>
+        <View style={styles.axisLegend}><Text style={styles.copy}>● Apnea interval</Text><Text style={styles.copy}>○ R-peak</Text><Text style={styles.copy}>● Selected peak</Text></View>
+      </GlassPanel>
+      <GlassPanel style={styles.nightPanel}>
+        <View style={styles.chartHead}><Text style={styles.chartTitle}>FULL NIGHT · click to seek · red = apnea annotation</Text><Text style={styles.rr}>{timeLabel(current)}</Text></View>
+        <View onLayout={(event) => setTimelineWidth(event.nativeEvent.layout.width)} style={styles.timeline}>
+          <View pointerEvents="none" style={StyleSheet.absoluteFill}>{study.events.map((event) => <View key={event.id} style={[styles.nightEvent,{left:`${seconds(event.start)/durationSeconds*100}%`,width:`${Math.max(0.15,(seconds(event.end)-seconds(event.start))/durationSeconds*100)}%`}]}/>)}</View>
+          <View pointerEvents="none" style={[styles.currentPosition,{left:`${current/durationSeconds*100}%`}]}/>
+          <Pressable accessibilityRole="button" accessibilityLabel="Seek across the full-night recording" onPress={(event) => seekNight(event.nativeEvent.locationX)} style={StyleSheet.absoluteFill}/>
         </View>
-        <View style={styles.summaryNumbers}>
-          <View style={styles.summaryNumberBlock}>
-            <Text style={styles.numberLabel}>TIME / TOTAL</Text>
-            <Text style={styles.timeValue}>01:41:53 <Text style={styles.timeTotal}>/ 08:28:20</Text></Text>
-          </View>
-          <View style={styles.summaryNumberBlock}>
-            <Text style={styles.numberLabel}>HEART RATE</Text>
-            <Text style={styles.heartValue}>60 <Text style={styles.heartUnit}>BPM</Text></Text>
-          </View>
-        </View>
-      </Surface>
-
-      <View style={[styles.reviewGrid, wide && styles.reviewGridWide]}>
-        <View style={styles.mainColumn}>
-          <Surface style={styles.viewerPanel}>
-            <View style={styles.viewerHeading}>
-              <View style={styles.viewerLegend}><View style={styles.mintDot} /><Text style={styles.viewerTitle}>Filtered ECG · 0.5–40 Hz</Text></View>
-              <View style={styles.viewerTags}><Pill label="NO SIGNAL DATA" tone="neutral" /><Text style={styles.leadText}>Lead MLII</Text></View>
-            </View>
-            <View style={styles.waveformCanvas}>
-              <View style={styles.gridLineHorizontal1} /><View style={styles.gridLineHorizontal2} />
-              <View style={[styles.apneaWindow, { left: `${Math.max(10, 20 + activeEvent * 11)}%` }]} />
-              <View style={[styles.cursorLine, { left: `${Math.max(14, 27 + activeEvent * 11)}%` }]} />
-              <View style={styles.axisLabels}>
-                <Text style={styles.axisText}>+3.5 mV</Text><Text style={styles.axisText}>+2.0</Text><Text style={styles.axisText}>0.0</Text><Text style={styles.axisText}>−1.5</Text><Text style={styles.axisText}>−3.0 mV</Text>
-              </View>
-              <View style={styles.canvasMessage}>
-                <Text style={styles.canvasGlyph}>∿</Text>
-                <Text style={styles.canvasTitle}>Waveform preview</Text>
-                <Text style={styles.canvasCopy}>ECG data will render here after backend integration.</Text>
-              </View>
-              <View style={styles.cursorTag}><View style={styles.cursorDot} /><Text style={styles.cursorTagText}>01:41:54 · R-peak marker</Text></View>
-            </View>
-            <View style={styles.timeRuler}>
-              {['1:41:50', '1:41:52', '1:41:54', '1:41:56', '1:41:58'].map((time) => <Text key={time} style={styles.timeTick}>{time}</Text>)}
-            </View>
-          </Surface>
-
-          <Surface style={styles.controlPanel}>
-            <View style={styles.controlRow}>
-              <Pressable accessibilityRole="button" onPress={() => setStreaming((value) => !value)} style={[styles.streamButton, streaming && styles.streamButtonActive]}>
-                <Text style={[styles.streamButtonText, streaming && styles.streamButtonTextActive]}>{streaming ? 'Ⅱ  Pause stream' : '▶  Start stream'}</Text>
-              </Pressable>
-              <View style={styles.speedButtons}>
-                {['0.5×', '1.0×', '2.0×'].map((item) => <SmallControl key={item} label={item} active={speed === item} onPress={() => setSpeed(item)} />)}
-              </View>
-              <SmallControl label="◷  10s" active={false} onPress={() => setSpeed('1.0×')} />
-            </View>
-            <View style={styles.controlRowSecondary}>
-              <AppButton onPress={() => setZoom((value) => Math.min(value + 1, 4))} variant="secondary" compact style={styles.flexButton}>
-                <Text style={styles.controlText}>⌕  Zoom in ×2</Text>
-              </AppButton>
-              <AppButton onPress={() => setZoom((value) => Math.max(value - 1, 1))} variant="secondary" compact style={styles.flexButton}>
-                <Text style={styles.controlText}>⌕  Zoom out ×2</Text>
-              </AppButton>
-              <AppButton onPress={() => setFilterActive((value) => !value)} variant="secondary" compact>
-                <Text style={styles.controlText}>{filterActive ? '✓  Filter on' : '☷  Filter off'}</Text>
-              </AppButton>
-              <Text style={styles.zoomLabel}>×{zoom}</Text>
-            </View>
-          </Surface>
-
-          <Surface style={styles.macroPanel}>
-            <SectionTitle title="Full night macro strip" subtitle="Illustrative event markers · tap a segment to seek" right={<Pill label="SAMPLE TIMELINE" tone="neutral" />} />
-            <View style={styles.macroStrip}>
-              {macroSegments.map((segment, index) => (
-                <Pressable key={`${segment}-${index}`} accessibilityRole="button" accessibilityLabel={`Go to sample time segment ${index + 1}`} onPress={() => setActiveEvent(index % intervals.length)} style={[styles.macroSegment, index % 4 === 1 ? styles.macroNormal : styles.macroApnea, index === activeEvent * 3 + 2 && styles.macroSelected, { flexGrow: segment }]} />
-              ))}
-              <View style={[styles.macroPlayhead, { left: `${26 + activeEvent * 9}%` }]} />
-            </View>
-            <View style={styles.macroTimes}><Text style={styles.macroTime}>00:00:00</Text><Text style={styles.macroTime}>02:46:40</Text><Text style={styles.macroTime}>05:33:20</Text><Text style={styles.macroTime}>08:28:20</Text></View>
-            <View style={styles.eventNav}>
-              <AppButton onPress={() => stepEvent(-1)} variant="secondary" compact style={styles.flexButton}><Text style={styles.controlText}>‹  Previous event</Text></AppButton>
-              <AppButton onPress={() => stepEvent(1)} variant="secondary" compact style={styles.flexButton}><Text style={styles.controlText}>Next event  ›</Text></AppButton>
-            </View>
-          </Surface>
-        </View>
-
-        <View style={styles.sideColumn}>
-          <Surface style={styles.intervalPanel}>
-            <SectionTitle title="Apnea intervals" subtitle="Illustrative annotations · 17 total" right={<Pill label="CONSECUTIVE MINUTES" tone="neutral" />} />
-            <View style={styles.tableHeader}>
-              <Text style={[styles.tableCell, styles.tableIndex]}>#</Text><Text style={[styles.tableCell, styles.tableFlex]}>START</Text><Text style={[styles.tableCell, styles.tableFlex]}>END</Text><Text style={[styles.tableCell, styles.tableDuration]}>DUR.</Text>
-            </View>
-            {intervals.map((item, index) => {
-              const active = index === activeEvent;
-              return (
-                <Pressable key={item.start} accessibilityRole="button" accessibilityState={{ selected: active }} onPress={() => setActiveEvent(index)} style={[styles.tableRow, active && styles.tableRowActive]}>
-                  <Text style={[styles.tableValue, styles.tableIndex, active && styles.activeTableValue]}>{index + 1}</Text>
-                  <Text style={[styles.tableValue, styles.tableFlex, active && styles.activeTableValue]}>{item.start}</Text>
-                  <Text style={[styles.tableValue, styles.tableFlex, active && styles.activeTableValue]}>{item.end}</Text>
-                  <Text style={[styles.tableValue, styles.tableDuration, styles.durationValue]}>{item.duration}</Text>
-                </Pressable>
-              );
-            })}
-            <View style={styles.intervalFooter}>
-              <Text style={styles.intervalNote}>Showing the sample events around this window.</Text>
-              <Text style={styles.activeEventNote}>Selected event {activeEvent + 1}</Text>
-            </View>
-          </Surface>
-
-          <Surface style={styles.detailNote}>
-            <Text style={styles.detailNoteTitle}>Waveform connection point</Text>
-            <Text style={styles.detailNoteText}>Replace the empty canvas with signal samples from your API when the backend is ready.</Text>
-            <AppButton href="/summary" variant="secondary" compact style={styles.summaryLink}>
-              <Text style={styles.controlText}>View summary screen  →</Text>
-            </AppButton>
-          </Surface>
-        </View>
-      </View>
-    </ScrollView>
-  );
+        <View style={styles.nightAxis}><Text style={styles.axisText}>00:00:00</Text><Text style={styles.axisText}>{timeLabel(durationSeconds/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds*2/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds)}</Text></View>
+      </GlassPanel>
+    </> : <GlassPanel style={styles.empty}><Text style={styles.chartTitle}>ECG samples are unavailable</Text><Text style={styles.copy}>This local preview reads recording headers only. It does not load ECG signal samples or generate apnea annotations.</Text></GlassPanel>}
+    <View style={styles.footer}><AppButton onPress={() => router.push('/summary')} style={styles.summaryButton}><Text style={styles.buttonText}>View summary</Text></AppButton></View>
+  </ScrollView>;
 }
 
-function SmallControl({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ selected: active }} onPress={onPress} style={[styles.smallControl, active && styles.smallControlActive]}><Text style={[styles.controlText, active && styles.smallControlTextActive]}>{label}</Text></Pressable>;
-}
-
-const styles = StyleSheet.create({
-  scroll: { flex: 1 },
-  page: { width: '100%', maxWidth: 1400, alignSelf: 'center', paddingHorizontal: 24, paddingTop: 24, paddingBottom: 42, gap: 15 },
-  summaryStrip: { gap: 13, paddingVertical: 15 },
-  summaryIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  studyAvatar: { width: 37, height: 37, borderRadius: 9, backgroundColor: colors.panelRaised, alignItems: 'center', justifyContent: 'center' },
-  studyAvatarText: { color: colors.mint, fontSize: 13, fontWeight: '800' },
-  studyId: { color: colors.text, fontSize: 12, fontWeight: '800' },
-  studyMeta: { color: colors.textSoft, fontSize: 10, marginTop: 2 },
-  summaryNumbers: { flexDirection: 'row', justifyContent: 'space-between', gap: 17 },
-  summaryNumberBlock: { flex: 1, gap: 4 },
-  numberLabel: { color: colors.textSoft, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
-  timeValue: { color: colors.text, fontSize: 24, lineHeight: 29, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  timeTotal: { color: colors.textSoft, fontSize: 11, fontWeight: '500' },
-  heartValue: { color: colors.mint, fontSize: 24, lineHeight: 29, fontWeight: '800' },
-  heartUnit: { color: colors.textSoft, fontSize: 10 },
-  // Put event navigation before the waveform on narrow screens; keep the viewer first on desktop.
-  reviewGrid: { flexDirection: 'column-reverse', gap: 14 },
-  reviewGridWide: { flexDirection: 'row', alignItems: 'flex-start' },
-  mainColumn: { flex: 1.45, gap: 13, minWidth: 0 },
-  sideColumn: { flex: 1, minWidth: 0, gap: 13 },
-  viewerPanel: { padding: 16 },
-  viewerHeading: { minHeight: 32, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
-  viewerLegend: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  mintDot: { width: 8, height: 8, borderRadius: 5, backgroundColor: colors.mintDeep },
-  viewerTitle: { color: '#EAF7FA', fontSize: 11, fontWeight: '700' },
-  viewerTags: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  leadText: { color: colors.textSoft, fontSize: 10 },
-  waveformCanvas: { height: 325, minHeight: 240, overflow: 'hidden', position: 'relative', borderWidth: 1, borderColor: 'rgba(0, 210, 255, 0.2)', backgroundColor: colors.panelDeep },
-  gridLineHorizontal1: { position: 'absolute', top: '35%', left: 0, right: 0, height: 1, backgroundColor: 'rgba(0, 210, 255, 0.12)' },
-  gridLineHorizontal2: { position: 'absolute', top: '68%', left: 0, right: 0, height: 1, backgroundColor: 'rgba(0, 210, 255, 0.12)' },
-  apneaWindow: { position: 'absolute', top: 0, bottom: 0, width: '20%', backgroundColor: 'rgba(250, 82, 82, 0.14)', borderLeftWidth: 1, borderRightWidth: 1, borderColor: 'rgba(250, 82, 82, 0.4)' },
-  cursorLine: { position: 'absolute', top: 0, bottom: 0, width: 1, borderLeftWidth: 1, borderStyle: 'dashed', borderColor: colors.cyan },
-  axisLabels: { position: 'absolute', left: 10, top: 12, bottom: 12, justifyContent: 'space-between' },
-  axisText: { color: '#A9C3CE', fontSize: 9 },
-  canvasMessage: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 70 },
-  canvasGlyph: { color: '#A9C3CE', fontSize: 32, opacity: 0.65 },
-  canvasTitle: { color: '#EAF7FA', fontSize: 12, fontWeight: '700', marginTop: 8 },
-  canvasCopy: { color: '#B6CBD4', fontSize: 10, textAlign: 'center', lineHeight: 15, marginTop: 5 },
-  cursorTag: { position: 'absolute', top: 12, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: '#143548' },
-  cursorDot: { width: 6, height: 6, borderRadius: 4, backgroundColor: '#00D2FF' },
-  cursorTagText: { color: '#EAF7FA', fontSize: 9, fontWeight: '700' },
-  timeRuler: { flexDirection: 'row', justifyContent: 'space-between', gap: 4, paddingHorizontal: 5, paddingTop: 8 },
-  timeTick: { color: colors.textSoft, fontSize: 8, fontVariant: ['tabular-nums'] },
-  controlPanel: { gap: 9, padding: 12 },
-  controlRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 7 },
-  streamButton: { flexGrow: 1, minWidth: 145, minHeight: 40, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.panelRaised, borderWidth: 1, borderColor: colors.border },
-  streamButtonActive: { backgroundColor: colors.mint, borderColor: colors.mint },
-  streamButtonText: { color: colors.text, fontSize: 11, fontWeight: '800' },
-  streamButtonTextActive: { color: '#FFFFFF' },
-  speedButtons: { flexDirection: 'row', gap: 3, padding: 3, borderRadius: 9, backgroundColor: colors.backgroundSoft },
-  smallControl: { minHeight: 33, paddingHorizontal: 10, borderRadius: 7, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.panelRaised, borderWidth: 1, borderColor: colors.border },
-  smallControlActive: { borderColor: colors.cyan, backgroundColor: colors.cyanSoft },
-  smallControlTextActive: { color: colors.mint },
-  controlRowSecondary: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  flexButton: { flex: 1, minWidth: 105 },
-  controlText: { color: colors.textSoft, fontSize: 9, fontWeight: '700' },
-  zoomLabel: { color: colors.muted, fontSize: 9, paddingHorizontal: 4 },
-  macroPanel: { gap: 4 },
-  macroStrip: { height: 54, position: 'relative', overflow: 'hidden', flexDirection: 'row', gap: 2, padding: 7, borderRadius: 9, backgroundColor: colors.panelDeep },
-  macroSegment: { borderRadius: 3 },
-  macroNormal: { backgroundColor: colors.mintDeep },
-  macroApnea: { backgroundColor: colors.roseDeep },
-  macroSelected: { opacity: 1, borderWidth: 2, borderColor: colors.cyan },
-  macroPlayhead: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: '#00D2FF' },
-  macroTimes: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 2, paddingTop: 7 },
-  macroTime: { color: colors.textSoft, fontSize: 9, fontVariant: ['tabular-nums'] },
-  eventNav: { flexDirection: 'row', gap: 7, marginTop: 10 },
-  intervalPanel: { padding: 14 },
-  tableHeader: { minHeight: 31, flexDirection: 'row', alignItems: 'center', borderRadius: 7, paddingHorizontal: 8, backgroundColor: colors.panelRaised },
-  tableCell: { color: colors.textSoft, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 },
-  tableIndex: { width: 24 },
-  tableFlex: { flex: 1, minWidth: 70 },
-  tableDuration: { width: 40, textAlign: 'right' },
-  tableRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
-  tableRowActive: { backgroundColor: colors.roseSoft, borderLeftWidth: 3, borderLeftColor: colors.rose },
-  tableValue: { color: colors.textSoft, fontSize: 10, fontVariant: ['tabular-nums'] },
-  activeTableValue: { color: colors.rose, fontWeight: '800' },
-  durationValue: { color: colors.rose, fontWeight: '700' },
-  intervalFooter: { gap: 6, marginTop: 12 },
-  intervalNote: { color: colors.muted, fontSize: 9, lineHeight: 14 },
-  activeEventNote: { color: colors.mint, fontSize: 9, fontWeight: '700' },
-  detailNote: { gap: 8, backgroundColor: colors.cyanSoft },
-  detailNoteTitle: { color: colors.cyan, fontSize: 11, fontWeight: '800' },
-  detailNoteText: { color: colors.textSoft, fontSize: 10, lineHeight: 15 },
-  summaryLink: { alignSelf: 'flex-start', marginTop: 3 },
-});
+function Control({ label, onPress, active = false, disabled = false }: { label: string; onPress: () => void; active?: boolean; disabled?: boolean }) { return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.control,active&&styles.controlActive,disabled&&styles.controlDisabled]}><Text style={[styles.controlText,active&&styles.controlTextActive]}>{label}</Text></Pressable>; }
+const styles=StyleSheet.create({scroll:{flex:1},page:{width:'100%',maxWidth:1500,alignSelf:'center',paddingHorizontal:20,paddingTop:12,paddingBottom:106,gap:10},pageWide:{paddingHorizontal:24},playerHeader:{minHeight:48,flexDirection:'row',flexWrap:'wrap',alignItems:'center',justifyContent:'space-between',gap:10},timeRow:{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:16},clock:{color:colors.text,fontSize:24,fontWeight:'800'},heartRate:{color:colors.text,fontSize:22,fontWeight:'700'},classification:{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:8,backgroundColor:'#BDEEE5'},classificationUnavailable:{backgroundColor:colors.panel},classificationText:{color:'#075B54',fontSize:14,fontWeight:'800'},controls:{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8},viewControls:{justifyContent:'space-between'},control:{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:8,borderWidth:1,borderColor:colors.border,backgroundColor:colors.scrim},controlActive:{backgroundColor:'#087F83'},controlDisabled:{opacity:0.45},controlText:{color:colors.text,fontSize:14,fontWeight:'700'},controlTextActive:{color:'#FFFFFF'},controlLabel:{color:colors.text,fontSize:14},picker:{minHeight:44,minWidth:92,borderWidth:1,borderColor:colors.border,borderRadius:8,backgroundColor:colors.scrim,color:colors.text,fontSize:14,fontFamily:fonts.regular,paddingHorizontal:8},eventNav:{flexDirection:'row',gap:8},chartPanel:{gap:8,padding:12,borderRadius:8},chartHead:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',gap:8},chartTitle:{color:colors.text,fontSize:14,fontWeight:'700'},rr:{color:colors.muted,fontSize:14},chartTouch:{width:'100%',overflow:'hidden',backgroundColor:'#061417'},axisLegend:{flexDirection:'row',flexWrap:'wrap',gap:14},copy:{color:colors.text,fontSize:14,lineHeight:21},nightPanel:{gap:8,padding:14,borderRadius:8},timeline:{position:'relative',height:76,justifyContent:'center',backgroundColor:'#07171A',borderLeftWidth:1,borderColor:colors.border},nightEvent:{position:'absolute',top:0,bottom:0,backgroundColor:eventRed},currentPosition:{position:'absolute',top:0,bottom:0,width:2,backgroundColor:colors.text,zIndex:1},nightAxis:{flexDirection:'row',justifyContent:'space-between'},axisText:{color:colors.text,fontSize:14},empty:{minHeight:240,justifyContent:'center',gap:10},footer:{alignItems:'flex-start',paddingTop:4},summaryButton:{minHeight:52},buttonText:{color:colors.accentText,fontSize:16,fontWeight:'800'},gate:{flex:1,justifyContent:'center',alignItems:'flex-start',padding:24,gap:16},title:{color:colors.text,fontSize:24,fontWeight:'800'}});

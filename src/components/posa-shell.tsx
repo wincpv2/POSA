@@ -1,180 +1,95 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Slot, usePathname } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-
-import { UploadProvider } from './posa-state';
+import { StatusBar } from 'expo-status-bar';
+import Svg, { Path, Circle } from 'react-native-svg';
+import { Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import { PosaText } from './posa-ui';
+import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
 
-const titles: Record<string, string> = {
-  '/': 'Home',
-  '/upload': 'Upload',
-  '/processing': 'Processing',
-  '/detail': 'Detail',
-  '/summary': 'Summary',
-};
+const icons = {
+  home: <Path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z" />,
+  upload: <><Path d="M12 16V4m-5 5 5-5 5 5" /><Path d="M4 17v4h16v-4" /></>,
+  processing: <><Circle cx="12" cy="12" r="9" /><Path d="M12 7v5l3 2" /></>,
+  detail: <Path d="M3 12h4l3-7 4 14 3-7h4" />,
+  summary: <><Path d="M6 3h9l4 4v14H6z" /><Path d="M15 3v5h4M9 12h7M9 16h7" /></>,
+} as const;
 
-export default function PosaShell() {
+function NavIcon({ name, color }: { name: keyof typeof icons; color: string }) {
+  return <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">{icons[name]}</Svg>;
+}
+
+function Workspace() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
-  const isDesktop = width >= 940;
+  const { study } = useUploadState();
+  const nextRequired = study.status === 'ready' && study.reportStatus === 'Approved' ? null
+    : study.status === 'empty' || study.status === 'uploaded' ? '/upload'
+      : study.status === 'processing' || study.status === 'failed' ? '/processing'
+        : pathname === '/detail' ? '/summary' : '/detail';
+  const caseLine = study.studyId
+    ? `${study.studyId} · ${study.age ? `${study.age} y` : 'Age unavailable'} · ${study.sex || 'Sex unavailable'} · BMI ${study.bmi || '—'}`
+    : 'Clinician workspace · No study selected';
 
-  return (
-    <UploadProvider>
-      <View style={styles.root}>
-        {isDesktop ? <DesktopSidebar pathname={pathname} /> : null}
-        <View style={styles.mainColumn}>
-          <View style={[styles.topbar, width < 400 && styles.topbarCompact]}>
-            <View style={styles.mobileBrand}>
-              <View style={styles.brandMark}><Text style={styles.brandGlyph}>∿</Text></View>
-              <View>
-                <View style={styles.brandNameRow}>
-                  <Text style={styles.brandName}>POSA</Text>
-                  <Text style={styles.brandCode}>STA-04</Text>
-                </View>
-                <Text style={styles.brandCaption}>PhysioNet AI v2.4</Text>
-              </View>
-            </View>
-            <View style={styles.topbarMeta}>
-              {isDesktop ? <Text style={styles.breadcrumb}>SLEEP LAB  /  {titles[pathname] ?? 'Workspace'}</Text> : null}
-              <View style={styles.caseMeta}>
-                <View style={styles.caseMetaText}>
-                  <Text style={styles.caseMetaTitle}>{isDesktop ? 'DEMO WORKSPACE' : titles[pathname] ?? 'Workspace'}</Text>
-                  <Text style={styles.caseMetaSub}>REC-8842-PT</Text>
-                </View>
-                <View style={styles.avatar}><Text style={styles.avatarText}>A</Text></View>
-              </View>
-            </View>
-          </View>
-          <View style={styles.routeContainer}>
-            <Slot />
-          </View>
-          {!isDesktop ? <MobileTabs pathname={pathname} /> : null}
-        </View>
+  return <View style={styles.root}>
+    <LinearGradient pointerEvents="none" colors={[colors.background, colors.gradientEnd]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
+    <StatusBar style="light" />
+    <View style={styles.header}>
+      <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
+        <PosaText style={styles.moon}>{'\u263e'}</PosaText><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
+      </Pressable></Link>
+      <View accessibilityLabel="Signed in as Dr. Thorne" style={styles.avatar}><PosaText style={styles.avatarText}>DT</PosaText></View>
+    </View>
+    <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
+      <View style={styles.caseChip}>
+        <PosaText style={styles.case}>{caseLine}</PosaText>
+        {study.severity ? <View style={[styles.severity, study.severity === 'Moderate' && styles.moderate, study.severity === 'Mild / Normal' && styles.mild, study.severity === 'Pending' && styles.pending]}><PosaText style={[styles.severityText, study.severity === 'Pending' && styles.severityLight]}>{study.severity === 'Severe OSA' ? '▲' : study.severity === 'Moderate' ? '◆' : study.severity === 'Mild / Normal' ? '✓' : '○'} {study.severity}</PosaText></View> : null}
       </View>
-    </UploadProvider>
-  );
-}
-
-function DesktopSidebar({ pathname }: { pathname: string }) {
-  return (
-    <View style={styles.sidebar}>
-      <View style={styles.sidebarBrand}>
-        <View style={styles.brandMarkLarge}><Text style={styles.brandGlyph}>∿</Text></View>
-        <View>
-          <View style={styles.brandNameRow}>
-            <Text style={styles.brandName}>POSA</Text>
-            <Text style={styles.brandCode}>STA-04</Text>
-          </View>
-          <Text style={styles.brandCaption}>PhysioNet AI v2.4</Text>
-        </View>
-      </View>
-
-      <Text style={styles.navCaption}>WORKSPACE</Text>
-      <View style={styles.navList}>
+      <View style={styles.notice}><PosaText style={styles.noticeText}>DEMO · Local preview only. Clinical analysis and PDF export are not connected.</PosaText></View>
+    </View>
+    <View style={styles.route}><Slot /></View>
+    <View pointerEvents="box-none" style={styles.dockAnchor}>
+      <View accessibilityRole="list" accessibilityLabel="Main navigation" style={[styles.dock, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
         {navItems.map((item) => {
-          const active = pathname === item.href || (item.href === '/' && pathname === '/index');
-          return (
-            <Link key={item.href} href={item.href} asChild>
-              <Pressable
-                accessibilityRole="link"
-                accessibilityState={{ selected: active }}
-                style={StyleSheet.flatten([styles.sideNavItem, active && styles.sideNavItemActive])}>
-                <Text style={[styles.navMark, active && styles.navMarkActive]}>{item.mark}</Text>
-                <View style={styles.navText}>
-                  <Text style={[styles.sideNavLabel, active && styles.sideNavLabelActive]}>{item.label}</Text>
-                  <Text style={styles.sideNavHint}>{item.hint}</Text>
-                </View>
-                {active ? <View style={styles.activeRail} /> : null}
-              </Pressable>
-            </Link>
-          );
+          const active = pathname === item.href;
+          const blocked = (item.href === '/processing' && study.status === 'empty')
+            || ((item.href === '/detail' || item.href === '/summary') && study.status !== 'ready');
+          const done = item.href === '/' ? true
+            : item.href === '/upload' ? study.status !== 'empty'
+            : item.href === '/processing' ? study.status === 'ready'
+              : item.href === '/detail' ? study.status === 'ready' && (pathname === '/summary' || study.reportStatus !== 'Draft')
+                : item.href === '/summary' ? study.reportStatus === 'Approved' : false;
+          const upcoming = item.href === nextRequired;
+          const iconName = item.href === '/' ? 'home' : item.href.slice(1) as keyof typeof icons;
+          const label = active ? `${item.label}, current` : done ? `${item.label}, done` : upcoming ? `${item.label}, next required` : `${item.label}, upcoming`;
+          return <Link key={item.href} href={blocked ? pathname as never : item.href} asChild>
+            <Pressable accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: active, disabled: blocked }} disabled={blocked} style={StyleSheet.flatten([styles.navButton, active && styles.navActive])}>
+              {done && !active && item.href !== '/' ? <PosaText style={styles.doneMark}>✓</PosaText> : <NavIcon name={iconName} color={active ? colors.accentText : colors.text} />}
+              {item.href === '/' && done && !active ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
+              {active ? <PosaText style={styles.navLabel}>{item.label}</PosaText> : upcoming && !done ? <View style={styles.nextDot} /> : null}
+            </Pressable>
+          </Link>;
         })}
       </View>
-
-      <View style={styles.sidebarSpacer} />
-      <View style={styles.sidebarDemoCard}>
-        <View style={styles.demoStatusRow}><View style={styles.demoStatusDot} /><Text style={styles.demoStatus}>DEMO ENVIRONMENT</Text></View>
-        <Text style={styles.demoCopy}>Interface preview with illustrative values. No analysis service is connected.</Text>
-      </View>
-      <Text style={styles.sidebarFooter}>POSA SLEEP LAB · BUILD 2.4</Text>
     </View>
-  );
+  </View>;
 }
 
-function MobileTabs({ pathname }: { pathname: string }) {
-  return (
-    <View style={styles.mobileTabs}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mobileTabsInner}>
-        {navItems.map((item) => {
-          const active = pathname === item.href || (item.href === '/' && pathname === '/index');
-          return (
-            <Link key={item.href} href={item.href} asChild>
-              <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={styles.mobileTab}>
-                <Text style={[styles.mobileTabMark, active && styles.mobileTabMarkActive]}>{item.mark}</Text>
-                <Text style={[styles.mobileTabLabel, active && styles.mobileTabLabelActive]}>{item.label}</Text>
-              </Pressable>
-            </Link>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-}
+export default function PosaShell() { return <UploadProvider><Workspace /></UploadProvider>; }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, flexDirection: 'row', backgroundColor: colors.background, minHeight: '100%' },
-  sidebar: {
-    width: 246,
-    paddingHorizontal: 17,
-    paddingTop: 24,
-    paddingBottom: 18,
-    backgroundColor: colors.backgroundSoft,
-    borderRightWidth: 1,
-    borderRightColor: colors.border,
-  },
-  sidebarBrand: { flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 48, paddingHorizontal: 4 },
-  brandMark: { width: 37, height: 37, borderRadius: 12, backgroundColor: colors.panelRaised, alignItems: 'center', justifyContent: 'center' },
-  brandMarkLarge: { width: 43, height: 43, borderRadius: 13, backgroundColor: colors.panelRaised, alignItems: 'center', justifyContent: 'center' },
-  brandGlyph: { color: colors.mint, fontSize: 25, fontWeight: '700', lineHeight: 29 },
-  brandNameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  brandName: { color: colors.text, fontWeight: '800', fontSize: 17 },
-  brandCode: { color: colors.mint, backgroundColor: colors.mintSoft, borderRadius: 5, overflow: 'hidden', paddingVertical: 2, paddingHorizontal: 6, fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
-  brandCaption: { marginTop: 4, color: colors.textSoft, fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  navCaption: { color: colors.muted, fontSize: 9, letterSpacing: 1.4, fontWeight: '800', paddingHorizontal: 10, marginBottom: 11 },
-  navList: { gap: 5 },
-  sideNavItem: { minHeight: 57, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 11, borderRadius: 11, position: 'relative', overflow: 'hidden' },
-  sideNavItemActive: { backgroundColor: colors.cyanSoft },
-  navMark: { width: 22, textAlign: 'center', color: colors.muted, fontSize: 19, fontWeight: '700' },
-  navMarkActive: { color: colors.mint },
-  navText: { gap: 3 },
-  sideNavLabel: { color: colors.textSoft, fontSize: 12, fontWeight: '700' },
-  sideNavLabelActive: { color: colors.mint },
-  sideNavHint: { color: colors.muted, fontSize: 10 },
-  activeRail: { position: 'absolute', left: 0, top: 12, bottom: 12, width: 3, backgroundColor: colors.mint, borderTopRightRadius: 4, borderBottomRightRadius: 4 },
-  sidebarSpacer: { flex: 1 },
-  sidebarDemoCard: { backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 1, borderRadius: 13, padding: 13, gap: 8, marginBottom: 20 },
-  demoStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  demoStatusDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.mint },
-  demoStatus: { color: colors.mint, fontSize: 9, fontWeight: '800', letterSpacing: 0.65 },
-  demoCopy: { color: colors.textSoft, fontSize: 10, lineHeight: 15 },
-  sidebarFooter: { color: colors.muted, fontSize: 8, letterSpacing: 1, textAlign: 'center' },
-  mainColumn: { flex: 1, minWidth: 0, backgroundColor: colors.background },
-  topbar: { height: 68, paddingHorizontal: 24, borderBottomWidth: 1, borderBottomColor: colors.border, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.backgroundSoft },
-  topbarCompact: { height: 62, paddingHorizontal: 14 },
-  mobileBrand: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  topbarMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flex: 1, gap: 18 },
-  breadcrumb: { color: colors.muted, fontSize: 10, fontWeight: '700', letterSpacing: 1.1 },
-  caseMeta: { flexDirection: 'row', alignItems: 'center', gap: 10, marginLeft: 'auto' },
-  caseMetaText: { alignItems: 'flex-end', gap: 3 },
-  caseMetaTitle: { color: colors.textSoft, fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
-  caseMetaSub: { color: colors.muted, fontSize: 10, fontVariant: ['tabular-nums'] },
-  avatar: { width: 34, height: 34, borderRadius: 18, backgroundColor: colors.cyanSoft, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: colors.cyan, fontSize: 16, fontWeight: '800' },
-  routeContainer: { flex: 1, minHeight: 0 },
-  mobileTabs: { minHeight: 67, paddingBottom: 5, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.backgroundSoft, justifyContent: 'center' },
-  mobileTabsInner: { flexGrow: 1, justifyContent: 'space-around', alignItems: 'center', paddingHorizontal: 5 },
-  mobileTab: { width: 69, alignItems: 'center', justifyContent: 'center', gap: 3, paddingVertical: 5 },
-  mobileTabMark: { color: colors.textSoft, fontSize: 19, lineHeight: 22, fontWeight: '700' },
-  mobileTabMarkActive: { color: colors.mint },
-  mobileTabLabel: { color: colors.textSoft, fontSize: 9, fontWeight: '700' },
-  mobileTabLabelActive: { color: colors.mint },
+  root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
+  header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
+  moon: { color: colors.muted, fontSize: 22 }, brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
+  avatar: { width: 42, height: 42, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
+  contentTop: { width: '100%', maxWidth: 1440, alignSelf: 'center', paddingHorizontal: 20, gap: 8 }, contentTopCompact: { paddingHorizontal: 12 },
+  caseChip: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
+  case: { color: colors.text, fontSize: 14, fontWeight: '700' }, severity: { backgroundColor: colors.coral, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }, moderate: { backgroundColor: '#FFD166' }, mild: { backgroundColor: colors.accent }, pending: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.text }, severityText: { color: colors.accentText, fontSize: 14, fontWeight: '800' }, severityLight: { color: colors.text },
+  notice: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 10 }, noticeText: { color: colors.text, fontSize: 14 },
+  route: { flex: 1, minHeight: 0, paddingBottom: 92 },
+  dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
+  dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
+  navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
+  doneMark: { color: colors.accent, fontSize: 20, fontWeight: '800' }, homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
 });
