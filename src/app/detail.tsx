@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import Picker from '@expo/ui/community/picker';
+import { Picker } from '@expo/ui/community/picker';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
@@ -56,13 +56,12 @@ export default function DetailScreen() {
       return `${index ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
     }).join(' ');
   }, [start, visibleSeconds]);
+  const playbackActive = playing && current < durationSeconds;
   useEffect(() => {
-    if (!playing) return;
+    if (!playbackActive) return;
     const timer = setInterval(() => setCurrent((value) => Math.min(durationSeconds, value + 0.25 * Number(speed))), 250);
     return () => clearInterval(timer);
-  }, [playing, speed, durationSeconds]);
-  useEffect(() => { if (current >= durationSeconds) setPlaying(false); }, [current, durationSeconds]);
-  useEffect(() => { if (Number.isFinite(requested)) setCurrent(Math.max(0, Math.min(durationSeconds, requested))); }, [params.time]);
+  }, [playbackActive, speed, durationSeconds]);
 
   const moveEvent = (direction: -1 | 1) => {
     const event = direction > 0
@@ -78,7 +77,7 @@ export default function DetailScreen() {
   return <ScrollView style={styles.scroll} contentContainerStyle={[styles.page, wide && styles.pageWide]}>
     <View style={styles.playerHeader}><View style={styles.timeRow}><Text style={styles.clock}>{timeLabel(current)} / {timeLabel(durationSeconds)}</Text><Text style={styles.heartRate}>{sample ? `HR ${heartRate} bpm` : 'HR —'}</Text></View><View style={[styles.classification, !sample && styles.classificationUnavailable]}><Text style={styles.classificationText}>{sample ? '✓ NORMAL · N' : 'Model output unavailable'}</Text></View></View>
     <View style={styles.controls}>
-      <Control label={playing ? 'Pause' : 'Play'} onPress={() => setPlaying((value) => !value)} active={playing} disabled={!sample}/>
+      <Control label={playbackActive ? 'Pause' : 'Play'} onPress={() => { if (playbackActive) setPlaying(false); else { if (current >= durationSeconds) setCurrent(0); setPlaying(true); } }} active={playbackActive} disabled={!sample}/>
       <Text style={styles.controlLabel}>Speed</Text><Picker enabled={sample} selectedValue={speed} onValueChange={(value) => setSpeed(String(value))} style={styles.picker}>{['0.5','1','2'].map((value) => <Picker.Item key={value} value={value} label={`${value}×`}/>)}</Picker>
       <Text style={styles.controlLabel}>Signal</Text><Picker enabled={sample} selectedValue={signal} onValueChange={(value) => setSignal(String(value))} style={styles.picker}>{['Filtered','Raw'].map((value) => <Picker.Item key={value} value={value} label={value}/>)}</Picker>
     </View>

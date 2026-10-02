@@ -11,7 +11,6 @@ const heartRates = [91,88,86,90,85,89,84,87,81,84,78,82,77,81,76,80,77,79];
 const rrCounts = [1,4,12,27,48,72,88,91,78,57,37,22,13,7,3,1];
 const hourWeights = [0.3,0.1,0.85,0.5,0.25,1.15,0.95,0.5,0.9];
 const seconds = (value: string) => value.split(':').reduce((n, part) => n * 60 + Number(part), 0);
-const timeLabel = (n: number) => { const s=Math.max(0,Math.floor(n));return `${String(Math.floor(s/3600)).padStart(2,'0')}:${String(Math.floor(s/60)%60).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; };
 
 export default function SummaryScreen() {
   const { width } = useWindowDimensions();

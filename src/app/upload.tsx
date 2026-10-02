@@ -1,8 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
-import Picker from '@expo/ui/community/picker';
+import { Picker } from '@expo/ui/community/picker';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppButton, FormLabel, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { sampleEvents, useUploadState } from '@/components/posa-state';
@@ -23,10 +23,6 @@ export default function UploadScreen() {
   const id = formatDeidentifiedStudyId(rawId);
   const rateOptions = [...new Set([...(study.sampleRate ? [study.sampleRate] : []), ...rates])].sort((a, b) => a - b);
   const leadOptions = [...new Set([...(study.lead ? [study.lead] : []), ...leads])];
-
-  useEffect(() => {
-    if (study.status === 'empty') { setRawId(''); setRate(''); setLead(''); }
-  }, [study.status]);
 
   const pick = async () => {
     setError('');
