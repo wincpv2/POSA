@@ -31,15 +31,10 @@ yarn-error.*
 *.pem
 
 # local env files
-.env
 .env*.local
-!.env.example
 
 # typescript
 *.tsbuildinfo
-
-# supabase
-supabase/.temp/
 
 example
 
