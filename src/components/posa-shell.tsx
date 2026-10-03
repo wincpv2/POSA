@@ -1,11 +1,18 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Slot, usePathname } from 'expo-router';
+import { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import { PosaText } from './posa-ui';
 import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
+import { useAuth } from '@/lib/auth-context';
+
+function initialsOf(name: string) {
+  const parts = name.split(/[\s@.]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '?') + (parts.length > 1 ? parts[1][0] : '')).toUpperCase();
+}
 
 const icons = {
   home: <Path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z" />,
@@ -23,6 +30,10 @@ function Workspace() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
   const { study } = useUploadState();
+  const { session, signOut } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const email = session?.user?.email ?? '';
+  const displayName: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
   const nextRequired = study.status === 'ready' && study.reportStatus === 'Approved' ? null
     : study.status === 'empty' || study.status === 'uploaded' ? '/upload'
       : study.status === 'processing' || study.status === 'failed' ? '/processing'
@@ -38,14 +49,14 @@ function Workspace() {
       <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
         <PosaText style={styles.moon}>{'\u263e'}</PosaText><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
       </Pressable></Link>
-      <View accessibilityLabel="Signed in as Dr. Thorne" style={styles.avatar}><PosaText style={styles.avatarText}>DT</PosaText></View>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${displayName}. Open account menu`} accessibilityState={{ expanded: menuOpen }} onPress={() => setMenuOpen((open) => !open)} style={[styles.avatar, menuOpen && styles.avatarOpen]}><PosaText style={styles.avatarText}>{initialsOf(displayName)}</PosaText></Pressable>
     </View>
     <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
       <View style={styles.caseChip}>
         <PosaText style={styles.case}>{caseLine}</PosaText>
         {study.severity ? <View style={[styles.severity, study.severity === 'Moderate' && styles.moderate, study.severity === 'Mild / Normal' && styles.mild, study.severity === 'Pending' && styles.pending]}><PosaText style={[styles.severityText, study.severity === 'Pending' && styles.severityLight]}>{study.severity === 'Severe OSA' ? '▲' : study.severity === 'Moderate' ? '◆' : study.severity === 'Mild / Normal' ? '✓' : '○'} {study.severity}</PosaText></View> : null}
       </View>
-      <View style={styles.notice}><PosaText style={styles.noticeText}>DEMO · Local preview only. Clinical analysis and PDF export are not connected.</PosaText></View>
+      <View style={styles.notice}><PosaText style={styles.noticeText}>Uploads are stored securely. Clinical analysis and PDF export are not connected yet.</PosaText></View>
     </View>
     <View style={styles.route}><Slot /></View>
     <View pointerEvents="box-none" style={styles.dockAnchor}>
@@ -72,7 +83,25 @@ function Workspace() {
         })}
       </View>
     </View>
+    {menuOpen ? <AccountMenu name={displayName} email={email} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} /> : null}
   </View>;
+}
+
+function AccountMenu({ name, email, onClose, onSignOut }: { name: string; email: string; onClose: () => void; onSignOut: () => void }) {
+  return <>
+    <Pressable accessibilityLabel="Close account menu" onPress={onClose} style={styles.menuBackdrop} />
+    <View accessibilityRole="menu" style={[styles.menu, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
+      <View style={styles.menuIdentity}>
+        <PosaText style={styles.menuName}>{name}</PosaText>
+        {email && email !== name ? <PosaText style={styles.menuEmail}>{email}</PosaText> : null}
+      </View>
+      <View style={styles.menuDivider} />
+      <Pressable accessibilityRole="menuitem" onPress={onSignOut} style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
+        <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={colors.coral} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><Path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" /></Svg>
+        <PosaText style={styles.menuSignOut}>Sign out</PosaText>
+      </Pressable>
+    </View>
+  </>;
 }
 
 export default function PosaShell() { return <UploadProvider><Workspace /></UploadProvider>; }
@@ -88,6 +117,12 @@ const styles = StyleSheet.create({
   case: { color: colors.text, fontSize: 14, fontWeight: '700' }, severity: { backgroundColor: colors.coral, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }, moderate: { backgroundColor: '#FFD166' }, mild: { backgroundColor: colors.accent }, pending: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.text }, severityText: { color: colors.accentText, fontSize: 14, fontWeight: '800' }, severityLight: { color: colors.text },
   notice: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 10 }, noticeText: { color: colors.text, fontSize: 14 },
   route: { flex: 1, minHeight: 0, paddingBottom: 92 },
+  avatarOpen: { borderWidth: 2, borderColor: colors.text },
+  menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 20 },
+  menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
+  menuIdentity: { paddingHorizontal: 12, paddingVertical: 10, gap: 2 }, menuName: { color: colors.text, fontSize: 15, fontWeight: '800' }, menuEmail: { color: colors.muted, fontSize: 13 },
+  menuDivider: { height: 1, marginHorizontal: 8, backgroundColor: colors.border },
+  menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
   navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },

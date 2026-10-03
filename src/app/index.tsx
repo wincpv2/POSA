@@ -1,61 +1,72 @@
 import { router } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
-import { sampleEvents, useUploadState, type ApneaEvent, type SummaryMetrics } from '@/components/posa-state';
+import { useUploadState, type Study } from '@/components/posa-state';
 import { colors, fonts } from '@/components/posa-theme';
+import { useAuth } from '@/lib/auth-context';
+import { listRecentEcgUploads, timeAgo, type RecentEcgUpload } from '@/lib/queries';
 
-type StudyStatus = 'Needs review' | 'Processing' | 'Approved';
-type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; duration: string; severity: string; burden: string; total: number; ago: string; progress?: number; apneaMinutes: string; clearMinutes: string; metrics: SummaryMetrics | null };
+type StudyStatus = 'Awaiting analysis' | 'Processing' | 'Failed';
+type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; detail: string; ago: string; upload: RecentEcgUpload };
 
-const records: StudyRecord[] = [
-  { id: 'REC-8842-PT', status: 'Needs review', age: '54', sex: 'M', duration: '08:30:00', severity: 'Severe OSA', burden: '47.2%', total: 17, ago: '10 min ago', apneaMinutes: '240', clearMinutes: '268', metrics: { rPeakCount: 41820, annotationRuns: 9, medianHrBpm: 82, sdnnMs: 87, rmssdMs: 45, validRrPercent: 100 } },
-  { id: 'REC-8841-KL', status: 'Needs review', age: '61', sex: 'M', duration: '08:12:00', severity: 'Severe OSA', burden: '49.3%', total: 19, ago: '42 min ago', apneaMinutes: '242', clearMinutes: '250', metrics: null },
-  { id: 'REC-8839-MN', status: 'Needs review', age: '47', sex: 'F', duration: '07:48:00', severity: 'Severe OSA', burden: '47.6%', total: 15, ago: '1 h 15 min ago', apneaMinutes: '223', clearMinutes: '245', metrics: null },
-  { id: 'REC-8845-QA', status: 'Processing', age: '58', sex: 'M', duration: '08:00:00', severity: 'Pending', burden: '', total: 19, ago: '8 min ago', progress: 62, apneaMinutes: '', clearMinutes: '', metrics: null },
-  { id: 'REC-8827-TS', status: 'Approved', age: '66', sex: 'M', duration: '07:30:00', severity: 'Moderate', burden: '31.0%', total: 12, ago: 'Yesterday', apneaMinutes: '140', clearMinutes: '310', metrics: null },
-  { id: 'REC-8829-RX', status: 'Approved', age: '39', sex: 'F', duration: '07:18:00', severity: 'Mild / Normal', burden: '16.6%', total: 4, ago: '5 h 20 min ago', apneaMinutes: '73', clearMinutes: '365', metrics: null },
-];
-const filters = [
-  { label: 'All', count: 6 }, { label: 'Needs review', count: 3 }, { label: 'Processing', count: 1 }, { label: 'Approved', count: 2 },
-] as const;
-const activity = [
-  { title: 'Uploaded REC-8845-QA', time: '8 min ago' },
-  { title: 'Processing finished REC-8841-KL', time: '42 min ago' },
-  { title: 'Report approved REC-8829-RX', time: '5 h 20 min ago' },
-];
+const statusOf = (dbStatus: string): StudyStatus => dbStatus === 'processing' ? 'Processing' : dbStatus === 'failed' ? 'Failed' : 'Awaiting analysis';
+const formatOf = (name: string | null): Study['format'] => /\.edf\b/i.test(name ?? '') ? 'edf' : /\.(hea|dat)\b/i.test(name ?? '') ? 'wfdb' : /\.(png|jpe?g|tiff?)\b/i.test(name ?? '') ? 'image' : null;
 
-function makeEvents(count: number): ApneaEvent[] {
-  return Array.from({ length: count }, (_, index) => ({ ...sampleEvents[index % sampleEvents.length], id: index + 1 }));
+function toRecord(upload: RecentEcgUpload): StudyRecord {
+  return {
+    id: upload.recordCode, status: statusOf(upload.status), upload, ago: timeAgo(upload.createdAt),
+    age: upload.ageYears != null ? String(upload.ageYears) : '—', sex: sexLabel(upload.sex) || '—',
+    detail: [upload.samplingRateHz ? `${upload.samplingRateHz} Hz` : null, upload.leadConfiguration].filter(Boolean).join(' · ') || 'Signal settings unavailable',
+  };
 }
+
+const sexLabel = (value: string | null) => value === 'unspecified' ? 'Unknown' : value ? value[0].toUpperCase() + value.slice(1) : '';
+
+const filterLabels = ['All', 'Awaiting analysis', 'Processing', 'Failed'] as const;
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const wide = width >= 1000;
+  const { session } = useAuth();
+  const displayName: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
   const { study, update, reset } = useUploadState();
+  const [records, setRecords] = useState<StudyRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<(typeof filters)[number]['label']>('All');
-  const visible = useMemo(() => records.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${record.severity} ${record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [filter, query]);
+  const [filter, setFilter] = useState<(typeof filterLabels)[number]>('All');
+
+  useEffect(() => {
+    let cancelled = false;
+    listRecentEcgUploads(50)
+      .then((rows) => { if (!cancelled) setRecords(rows.map(toRecord)); })
+      .catch((reason) => { if (!cancelled) setLoadError(reason instanceof Error ? reason.message : 'Could not load studies.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const filters = filterLabels.map((label) => ({ label, count: label === 'All' ? records.length : records.filter((record) => record.status === label).length }));
+  const visible = useMemo(() => records.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [records, filter, query]);
+  const awaiting = records.filter((record) => record.status === 'Awaiting analysis').length;
+
   const open = (record: StudyRecord) => {
+    const { upload } = record;
     update({
-      studyId: record.id, fileName: `${record.id.toLowerCase()}.edf`, format: 'edf', sampleRate: 250, lead: 'Lead II',
-      age: record.age, sex: record.sex === 'M' ? 'Male' : 'Female', bmi: record.id === 'REC-8842-PT' ? '29.8' : '', severity: record.severity,
-      apneaBurden: record.burden, apneaMinutes: record.apneaMinutes, noEventMinutes: record.clearMinutes, duration: record.duration,
-      metadata: 'Sample record · illustrative values', status: record.status === 'Processing' ? 'processing' : 'ready',
-      progress: record.progress ?? 100, events: makeEvents(record.total), summaryMetrics: record.metrics,
-      reportStatus: record.status === 'Approved' ? 'Approved' : 'Draft',
+      studyId: record.id, fileName: upload.originalFilename, format: formatOf(upload.originalFilename), sampleRate: upload.samplingRateHz, lead: upload.leadConfiguration ?? '',
+      age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '', severity: 'Pending',
+      apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '',
+      metadata: 'Stored upload · analysis not connected', status: 'ready', progress: 100, events: [], summaryMetrics: null, reportStatus: 'Draft',
     });
-    router.push(record.status === 'Processing' ? '/processing' : record.status === 'Approved' ? '/summary' : '/detail');
+    router.push('/detail');
   };
-  const activeRecord = records.find((record) => record.id === study.studyId);
   const hasActiveStudy = Boolean(study.studyId && study.status !== 'empty');
-  const continueRecord = activeRecord ?? records[0];
-  const continuePath = study.status === 'processing' || study.status === 'failed' ? '/processing' : study.status === 'ready' && study.reportStatus === 'Approved' ? '/summary' : '/detail';
+  const continuePath = study.status === 'processing' || study.status === 'failed' ? '/processing' : '/detail';
   const beginNew = () => { reset(); router.push('/upload'); };
 
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <View style={[styles.greetingRow, wide && styles.greetingRowWide]}>
-      <View style={styles.greeting}><Text style={styles.title}>Good evening, Dr. Thorne</Text><Text style={styles.copy}>3 studies need your review · 1 is still processing</Text></View>
+      <View style={styles.greeting}><Text style={styles.title}>Welcome, {displayName}</Text><Text style={styles.copy}>{loading ? 'Loading your studies…' : `${records.length} stored ${records.length === 1 ? 'study' : 'studies'} · ${awaiting} awaiting analysis`}</Text></View>
       <View style={[styles.searchActions, wide && styles.searchActionsWide]}>
         <TextInput value={query} onChangeText={setQuery} placeholder="Search study ID" placeholderTextColor={colors.muted} style={styles.search} accessibilityLabel="Search study ID" />
         <Pressable accessibilityRole="button" onPress={beginNew} style={styles.secondaryStart}><Text style={styles.secondaryStartText}>+ Start new study</Text></Pressable>
@@ -64,40 +75,35 @@ export default function HomeScreen() {
 
     <View style={[styles.columns, wide && styles.columnsWide]}>
       <View style={styles.mainColumn}>
-        <GlassPanel style={styles.continueCard}>
-          <View style={styles.continueCopy}><Text style={styles.sectionTitle}>Continue where you left off</Text><Text style={styles.copy}>{hasActiveStudy ? `${study.studyId} · ${study.status === 'processing' ? 'Processing' : 'Detail'} · ${study.events.length} apnea events · Report ${study.reportStatus.toLowerCase()}` : `${continueRecord.id} · Detail · ${continueRecord.total} apnea events · Report draft`}</Text>
-            <View accessibilityRole="progressbar" accessibilityLabel="Analysis progress" accessibilityValue={{ min: 0, max: 100, now: hasActiveStudy ? study.status === 'ready' ? 100 : study.progress : 100 }} style={styles.progressTrack}><View style={[styles.progressFill, { width: `${hasActiveStudy ? study.status === 'ready' ? 100 : study.progress : 100}%` }]} /></View>
-          </View>
-          <AppButton onPress={() => hasActiveStudy ? router.push(continuePath as never) : open(continueRecord)} style={styles.continueButton}><Text style={styles.continueButtonText}>Continue review</Text></AppButton>
-        </GlassPanel>
+        {hasActiveStudy ? <GlassPanel style={styles.continueCard}>
+          <View style={styles.continueCopy}><Text style={styles.sectionTitle}>Continue where you left off</Text><Text style={styles.copy}>{study.studyId} · {study.status === 'processing' ? 'Processing' : 'Detail'} · Report {study.reportStatus.toLowerCase()}</Text></View>
+          <AppButton onPress={() => router.push(continuePath as never)} style={styles.continueButton}><Text style={styles.continueButtonText}>Continue review</Text></AppButton>
+        </GlassPanel> : null}
 
         <GlassPanel style={styles.studiesPanel}>
           <View style={styles.studiesHeading}><Text style={styles.sectionTitle}>Studies</Text></View>
           <View style={styles.filters}>{filters.map((item) => <Pressable key={item.label} accessibilityRole="button" accessibilityState={{ selected: filter === item.label }} onPress={() => setFilter(item.label)} style={[styles.filter, filter === item.label && styles.filterActive]}><Text style={[styles.filterText, filter === item.label && styles.filterTextActive]}>{item.label} {item.count}</Text></Pressable>)}</View>
           <View style={styles.recordList}>
-            {visible.length ? visible.map((record) => <StudyRow key={record.id} record={record} compact={!wide} onPress={() => open(record)} />) : <Text style={styles.empty}>No studies match this search and filter.</Text>}
+            {loading ? <ActivityIndicator color={colors.accent} />
+              : loadError ? <Text accessibilityRole="alert" style={styles.empty}>Could not load studies: {loadError}</Text>
+              : visible.length ? visible.map((record) => <StudyRow key={record.upload.id} record={record} compact={!wide} onPress={() => open(record)} />)
+              : <Text style={styles.empty}>{records.length ? 'No studies match this search and filter.' : 'No studies yet. Press "+ Start new study" to upload your first ECG recording.'}</Text>}
           </View>
         </GlassPanel>
       </View>
 
       <View style={[styles.sideColumn, wide && styles.sideColumnWide]}>
         <GlassPanel style={styles.sidePanel}>
-          <Text style={styles.sectionTitle}>This week</Text>
+          <Text style={styles.sectionTitle}>Overview</Text>
           <View style={styles.kpiGrid}>
-            <Kpi value="3" label="Awaiting review" /> <Kpi value="3" label="Severe cases" />
-            <Kpi value="12" label="Approved" /> <Kpi value="38%" label="Avg apnea burden" />
+            <Kpi value={String(records.length)} label="Stored studies" />
+            <Kpi value={String(awaiting)} label="Awaiting analysis" />
           </View>
-        </GlassPanel>
-        <GlassPanel style={styles.sidePanel}>
-          <Text style={styles.sectionTitle}>Severity mix</Text>
-          <View accessibilityRole="image" accessibilityLabel="Severity distribution: 3 severe, 1 moderate, 1 mild or normal, 1 pending" style={styles.mixBar}>
-            <View style={[styles.mixSevere, { flex: 3 }]} /><View style={[styles.mixModerate, { flex: 1 }]} /><View style={[styles.mixMild, { flex: 1 }]} /><View style={[styles.mixPending, { flex: 1 }]} />
-          </View>
-          <View style={styles.legend}><Legend color={colors.coral} text="Severe 3" /><Legend color="#FFD166" text="Moderate 1" /><Legend color={colors.accent} text="Mild / Normal 1" /><Legend color={colors.text} text="Pending 1" dashed /></View>
+          <Text style={styles.subCopy}>Severity and apnea burden appear once the analysis model is connected.</Text>
         </GlassPanel>
         <GlassPanel style={styles.sidePanel}>
           <Text style={styles.sectionTitle}>Recent activity</Text>
-          <View style={styles.activityList}>{activity.map((item) => <View key={item.title} style={styles.activityRow}><Text style={styles.activityTitle}>{item.title}</Text><Text style={styles.activityTime}>{item.time}</Text></View>)}</View>
+          <View style={styles.activityList}>{records.slice(0, 5).map((record) => <View key={record.upload.id} style={styles.activityRow}><Text style={styles.activityTitle}>Uploaded {record.id}</Text><Text style={styles.activityTime}>{record.ago}</Text></View>)}{!records.length && !loading ? <Text style={styles.subCopy}>Nothing yet.</Text> : null}</View>
         </GlassPanel>
       </View>
     </View>
@@ -105,19 +111,17 @@ export default function HomeScreen() {
 }
 
 function StudyRow({ record, compact, onPress }: { record: StudyRecord; compact: boolean; onPress: () => void }) {
-  const ratio = record.status === 'Processing' ? (record.progress ?? 0) : 100;
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${record.id}, ${record.age} years, ${record.sex}, ${record.duration}, ${record.severity}, ${record.status}, ${record.total} apnea events, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, pressed && styles.pressed]}>
+  return <Pressable accessibilityRole="button" accessibilityLabel={`${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, pressed && styles.pressed]}>
     <View style={[styles.studyRow, compact && styles.studyRowCompact]}>
-      <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.duration}</Text></View>
-      <View style={[styles.severityBadge, record.severity === 'Severe OSA' && styles.severeBadge, record.severity === 'Moderate' && styles.moderateBadge, record.severity === 'Mild / Normal' && styles.mildBadge, record.severity === 'Pending' && styles.pendingBadge]}><Text style={[styles.severityText, record.severity !== 'Pending' && styles.badgeDark]}>{record.severity === 'Severe OSA' ? '▲' : record.severity === 'Moderate' ? '◆' : record.severity === 'Mild / Normal' ? '✓' : '○'} {record.severity}{record.burden ? ` · ${record.burden}` : ''}</Text></View>
-      <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status === 'Processing' ? `Processing ${record.progress}%` : record.status === 'Approved' ? 'Report approved' : 'Report needs review'}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: `${ratio}%` }]} /></View></View>
-      <View style={styles.reviewBlock}><Text style={styles.reviewText}>{record.total} apnea events</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
+      <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
+      <View style={[styles.severityBadge, styles.pendingBadge]}><Text style={styles.severityText}>○ Pending</Text></View>
+      <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: record.status === 'Awaiting analysis' ? '0%' : '100%' }]} /></View></View>
+      <View style={styles.reviewBlock}><Text style={styles.reviewText}>Stored</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
     </View>
   </Pressable>;
 }
 
 function Kpi({ value, label }: { value: string; label: string }) { return <View style={styles.kpi}><Text style={styles.kpiValue}>{value}</Text><Text style={styles.kpiLabel}>{label}</Text></View>; }
-function Legend({ color, text, dashed = false }: { color: string; text: string; dashed?: boolean }) { return <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: dashed ? 'transparent' : color, borderColor: color }, dashed && styles.dashed]} /><Text style={styles.legendText}>{text}</Text></View>; }
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 }, page: { width: '100%', maxWidth: 1480, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 112, gap: 16 },
