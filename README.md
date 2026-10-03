@@ -1,56 +1,102 @@
-# Welcome to your Expo app 👋
+# POSA — Predictor of Obstructive Sleep Apnea
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+แอป React Native (Expo) ที่เป็นเวิร์กสเตชันให้แพทย์/บุคลากรห้องแล็บนอนหลับ อัปโหลดสัญญาณ ECG
+ของผู้ป่วย รันโมเดลทำนายความเสี่ยง OSA (obstructive sleep apnea) แล้วดูผลตรวจได้
 
-## Get started
+## ทีม
 
-1. Install dependencies
+| บทบาท | ชื่อ |
+|---|---|
+| UI/UX Designer | Pisit Pipathanabenjakul |
+| Researcher | Papangkorn Bennarong |
+| ML Engineer | Worraprach Srirattananon |
+| Mobile App Developer (ต่อ frontend↔backend, storage/database) | Panut Anan |
 
-   ```bash
-   npm install
-   ```
+## Tech stack
 
-2. Start the app
+- **แอป**: Expo / React Native, ระบบ routing แบบ file-based ของ `expo-router`
+- **Backend**: [Supabase](https://supabase.com) — Postgres, Auth, Storage, Row Level Security
+- **Auth**: Google OAuth ผ่าน Supabase Auth
+- **ML**: CatBoost / XGBoost / CNN ensemble บน feature ที่แปลงมาจาก ECG (RRI, EDR, CPC,
+  STFT/CWT) เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
 
-   ```bash
-   npx expo start
-   ```
+## เริ่มต้นใช้งาน
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+### 1. ติดตั้ง dependencies
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### 2. ตั้งค่า environment variables
 
-### Other setup steps
+คัดลอก `.env.example` เป็น `.env` แล้วกรอกค่าจริงจาก Supabase dashboard
+(**Project Settings → Data API** สำหรับ URL, **Project Settings → API Keys** สำหรับ key):
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+cp .env.example .env
+```
 
-## Learn more
+```
+EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon/publishable key>
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+**ห้ามใช้ `service_role` key ตรงนี้เด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ
+Row Level Security เท่านั้น — `service_role` เป็น key ที่ bypass RLS ทั้งหมด ห้ามอยู่ใน
+โค้ดฝั่ง client เด็ดขาด **ห้าม commit ไฟล์ `.env`** เข้า git (ถูก ignore ไว้แล้ว) —
+มีแค่ `.env.example` เท่านั้นที่ควร commit
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### 3. รันแอป
 
-## Join the community
+```bash
+npx expo start
+```
 
-Join our community of developers creating universal apps.
+## ตั้งค่า Backend (Supabase)
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Migration ทั้งหมดอยู่ที่ `supabase/migrations/` ใช้
+[Supabase CLI](https://supabase.com/docs/guides/cli) รันได้เลยผ่าน `npx supabase`
+โดยไม่ต้องติดตั้งแยก:
+
+```bash
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
+
+Generate TypeScript types จาก schema จริงทุกครั้งที่มีการแก้ migration:
+
+```bash
+npx supabase gen types typescript --linked > src/lib/database.types.ts
+```
+
+### ภาพรวม Schema
+
+- `profiles` — บัญชีของแพทย์ (1:1 กับ `auth.users`) มี `consent_accepted` เก็บว่ายินยอมให้เก็บข้อมูลสุขภาพหรือยัง
+- `patients` — ตัวตนผู้ป่วยแบบใช้ร่วมกัน (sex, date of birth, BMI) — ไม่ได้เป็นของแพทย์คนใดคนหนึ่ง
+- `clinician_patients` — ตารางเชื่อม 1 แถวต่อความสัมพันธ์แพทย์↔ผู้ป่วย 1 คู่
+  (subject code, notes) — นี่คือจุดที่ทำให้แพทย์หลายคนแชร์ประวัติผู้ป่วยคนเดียวกันได้ —
+  แพทย์คนไหนก็ตามที่ผูกอยู่กับผู้ป่วยคนนั้น จะเห็นทุกการตรวจของผู้ป่วยคนนั้น ไม่ใช่แค่ที่ตัวเองอัปโหลด
+- `ecg_uploads` — 1 แถวต่อการตรวจ ECG 1 ครั้ง ไฟล์เก็บใน Storage bucket แบบ private ชื่อ `ecg-files`
+- `models` — ทะเบียนโมเดล ML (แพทย์อ่านได้อย่างเดียว เขียนได้แค่ผ่าน service-role)
+- `predictions`, `prediction_minutes`, `sleep_sessions` — **ยังไม่ได้สร้าง** รอ output
+  contract จากทีม ML (รูปแบบ label, มี confidence score ไหม, หน่วยเวลาที่ใช้)
+- `audit_log` — บันทึกประวัติการใช้งาน เข้าถึงได้แค่ผ่าน service-role
+
+ทุกตารางเปิด Row Level Security ตารางที่เป็นข้อมูลทางคลินิก/ประวัติ (`patients`, `ecg_uploads`)
+ใช้ soft delete (`deleted_at`) แทนการลบจริง เพื่อรักษา audit trail
+
+## หมายเหตุด้านความปลอดภัย
+
+- RLS คือด่านความปลอดภัยตัวจริง — การกรองข้อมูลฝั่ง client เป็นแค่ความสะดวก ไม่ใช่การป้องกัน
+- `service_role` key ไม่อยู่ในแอปเด็ดขาด ใช้แค่ anon/publishable key เท่านั้น
+- ความลับ (service_role key, OAuth client secret, ข้อมูลผู้ป่วยจริง) ห้ามหลุดเข้า git
+  ถ้าไม่แน่ใจ เช็คด้วย: `git log --all --full-history -- .env` ต้องได้ผลว่างเปล่า
+- แอปต้องโชว์ข้อความ responsible-AI disclaimer และขอ consent แยกต่างหากจากการ login
+  ก่อนจะเก็บข้อมูลสุขภาพใดๆ (ดู `src/components/login-screen.tsx`)
+
+## สถานะโปรเจกต์
+
+ดูสรุปสำหรับที่ประชุมทีมสำหรับความคืบหน้าปัจจุบัน สิ่งที่เหลือ และประเด็นที่ยังต้องตัดสินใจ
+(การให้ผู้ป่วย login ดูผลตรวจแบบ read-only, การจับคู่ผู้ป่วยข้ามแพทย์, และ UI เลือกผู้ป่วยในหน้า Upload)
