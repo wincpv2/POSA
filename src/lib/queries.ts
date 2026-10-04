@@ -1,6 +1,11 @@
-import * as Linking from 'expo-linking';
-
 import { supabase } from './supabase';
+
+// Patients open their links in the POSA app only, so every link the clinician
+// shares uses the app's own scheme (app.json "scheme"), whether it was
+// created on the web or in the app. Tapping it on a phone with POSA installed
+// opens the patient screen; the in-app Scan QR / Paste link accept it too.
+const APP_SCHEME = 'posaapp';
+const appLink = (path: string) => `${APP_SCHEME}://${path}`;
 
 export type RecentEcgUpload = {
   id: string;
@@ -247,7 +252,7 @@ export async function createShareLink(ecgUploadId: string): Promise<ShareLink> {
     .single();
   if (error) throw error;
 
-  return { token, url: Linking.createURL(`/shared/${token}`), expiresAt: data.expires_at };
+  return { token, url: appLink(`shared/${token}`), expiresAt: data.expires_at };
 }
 
 export type SharedStudy = {
@@ -310,7 +315,7 @@ export async function createPatientDashboardLink(patientId: string): Promise<Sha
     .single();
   if (error) throw error;
 
-  return { token, url: Linking.createURL(`/p/${token}`), expiresAt: data.expires_at };
+  return { token, url: appLink(`p/${token}`), expiresAt: data.expires_at };
 }
 
 export type DashboardNight = {
@@ -421,12 +426,24 @@ export async function listReportPdfs(uploadId: string): Promise<SavedReportPdf[]
 }
 
 // Uploads the signed PDF into the clinician's own folder, then records it.
-// The database only accepts this while the report is approved.
-export async function saveReportPdf(uploadId: string, recordCode: string, pdf: Blob, signed: { approvedByName: string | null; approvedAt: string | null }): Promise<void> {
+// The database only accepts this while the report is approved, and keeps one
+// PDF per approval (report_pdfs_one_per_approval). An approval that is already
+// stored is skipped before anything is uploaded: returns 'already-saved'.
+export async function saveReportPdf(uploadId: string, recordCode: string, pdf: Blob, signed: { approvedByName: string | null; approvedAt: string | null }): Promise<'saved' | 'already-saved'> {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
+
+  if (!signed.approvedAt) throw new Error('The report is not approved.');
+  const { data: existing, error: existingError } = await supabase
+    .from('report_pdfs')
+    .select('id')
+    .eq('ecg_upload_id', uploadId)
+    .eq('approved_at', signed.approvedAt)
+    .limit(1);
+  if (existingError) throw existingError;
+  if (existing && existing.length > 0) return 'already-saved';
 
   const path = `${clinicianId}/${uploadId}/${Date.now()}-${recordCode || 'report'}.pdf`;
   const { error: uploadError } = await supabase.storage.from('report-pdfs').upload(path, pdf, { contentType: 'application/pdf' });
@@ -439,7 +456,10 @@ export async function saveReportPdf(uploadId: string, recordCode: string, pdf: B
     approved_by_name: signed.approvedByName,
     approved_at: signed.approvedAt,
   });
+  // Saved at the same moment from another tab: the unique rule kept one copy.
+  if (error?.code === '23505') return 'already-saved';
   if (error) throw error;
+  return 'saved';
 }
 
 // A short-lived link to open or download a saved PDF.

@@ -6,6 +6,7 @@ import { getPatientDashboard, type DashboardNight, type PatientDashboard as Dash
 import { FULL_DISCLAIMER, PublicScreen } from './public-screen';
 import { AppButton, GlassPanel, PosaText as Text } from './posa-ui';
 import { colors } from './posa-theme';
+import { EMPTY_RESULTS, SeveritySummary, SleepResultsPanel } from './sleep-results';
 
 const dateLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 const statusLabel = (status: string) => status === 'failed' ? 'Analysis failed' : 'Awaiting analysis';
@@ -14,8 +15,8 @@ const statusLabel = (status: string) => status === 'failed' ? 'Analysis failed' 
 // QR code / link their clinician gives them; no account. Shows no identity:
 // get_patient_dashboard never returns it.
 //
-// The health parameters shown here are not decided yet (they depend on the
-// analysis model's output). They go in <ParameterGrid> once agreed.
+// The parameters are the same set as the clinician's Summary (sleep-results.tsx),
+// with patient-friendly wording; they show "—" until the analysis provides them.
 export default function PatientDashboard({ token, onBack }: { token: string; onBack: () => void }) {
   const [state, setState] = useState<{ loading: boolean; data: Dashboard | null; error: string }>({ loading: true, data: null, error: '' });
 
@@ -55,10 +56,13 @@ export default function PatientDashboard({ token, onBack }: { token: string; onB
                   <Text style={styles.latestDate}>{dateLabel(latest.createdAt)}</Text>
                   <StatusPill status={latest.status} reviewed={Boolean(latest.patientExplanation)} />
                 </View>
-                <ParameterGrid night={latest} />
                 <ClinicianMessage night={latest} />
               </> : <Text style={styles.copy}>No nights recorded yet. Your clinician will add them after each sleep study.</Text>}
             </GlassPanel>
+            {latest ? <>
+              <SeveritySummary ahi={EMPTY_RESULTS.ahi} />
+              <SleepResultsPanel results={EMPTY_RESULTS} audience="patient" />
+            </> : null}
 
             {data.nights.length > 0 ? (
               <GlassPanel style={styles.panel}>
@@ -83,22 +87,6 @@ export default function PatientDashboard({ token, onBack }: { token: string; onB
           </>
         )}
     </PublicScreen>
-  );
-}
-
-// Placeholder tiles until the parameters are agreed with the clinical/ML team.
-function ParameterGrid({ night }: { night: DashboardNight }) {
-  const pending = night.status !== 'failed' && !night.patientExplanation;
-  return (
-    <View style={styles.grid}>
-      {['Result', 'Breathing pauses', 'Sleep heart rate'].map((label) => (
-        <View key={label} style={styles.tile}>
-          <Text style={styles.tileLabel}>{label}</Text>
-          <Text style={styles.tileValue}>—</Text>
-          <Text style={styles.tileSub}>{pending ? 'Ready after analysis' : night.patientExplanation ? "See your clinician's message" : 'Not available'}</Text>
-        </View>
-      ))}
-    </View>
   );
 }
 

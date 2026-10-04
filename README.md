@@ -37,6 +37,9 @@
   อ่าน sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม
 - **Detail:** หน้าดูสัญญาณ ECG (เล่น, ซูม, เลือกช่วงเวลา, เลื่อนไป apnea event ก่อนหน้า/ถัดไป)
   ตอนนี้แสดงกราฟได้เฉพาะรายการตัวอย่าง (SAMPLE) ส่วนการตรวจจริงจะแสดงเมื่อเชื่อมต่อ API ของ ML แล้ว
+- **Summary / Results:** ตัวเลขสรุปเดิม + แผงผลการนอน AHI (AI, HI), Events Breakdown
+  (Obstructive / Central / Mixed / Hypopnoea) และ ODI (SpO₂ Baseline / Avg / Lowest) พร้อมคำอธิบายภาษาไทย
+  ตอนนี้แสดง “—” จนกว่าจะเชื่อมผลวิเคราะห์ (ODI / SpO₂ ต้องมีเครื่องวัดออกซิเจนร่วมด้วย ECG อย่างเดียววัดไม่ได้)
 - **Summary / Report:**
   - แพทย์เขียน **Clinician opinion** และ **Patient explanation** เอง แล้วบันทึกลงฐานข้อมูล
   - สถานะ Draft → Reviewed → Approved และย้อนกลับได้
@@ -50,7 +53,8 @@
 
 ### ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
 - **Scan QR** (ค่าเริ่มต้น) หรือ **Paste link** เพื่อเปิด Dashboard ของตัวเอง
-- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง และเห็น **ข้อความจากแพทย์**
+- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง, **รูปสรุป**พร้อมแถบระดับความรุนแรงตาม AHI,
+  **พารามิเตอร์ชุดเดียวกับหน้า Summary ของแพทย์** (คำอธิบายภาษาง่าย) และเห็น **ข้อความจากแพทย์**
   (Patient explanation) เฉพาะคืนที่แพทย์ Approve รายงานแล้ว
 - ไม่แสดงชื่อ รหัสผู้ป่วย หรือความเห็นของแพทย์ (Clinician opinion) ให้ผู้ป่วยเห็น
 
@@ -103,7 +107,7 @@ npx expo lint
 
 ## Backend (Supabase)
 
-Migration ทั้งหมดอยู่ใน `supabase/migrations/` (18 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
+Migration ทั้งหมดอยู่ใน `supabase/migrations/` (19 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
 
 ```bash
 npx supabase login
@@ -181,6 +185,6 @@ supabase/migrations/   schema, RLS และฟังก์ชันทั้ง
 ## สิ่งที่ยังไม่ได้ทำ
 
 - เชื่อมต่อโมเดล ML (ต้องตกลง output contract กับทีม ML ก่อน: label และ probability รายนาที, R-peaks, beat labels)
-- พารามิเตอร์ใน Dashboard ผู้ป่วย (รอตกลงกับทีม)
+- ค่าจริงของ AHI / Events / ODI (UI พร้อมแล้ว รอผลจาก ML และสัญญาณ SpO₂) — นิยามทั้งหมดอยู่ที่ `src/components/sleep-results-data.ts`
 - Tier 3: ปุ่มขอลบบัญชีหรือข้อมูล, Privacy Policy, บัญชีสำหรับ reviewer
 - ทดสอบบนมือถือจริง (ตอนนี้ทดสอบบนเว็บเป็นหลัก)

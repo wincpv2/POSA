@@ -6,6 +6,7 @@ import { getSharedStudy, type SharedStudy } from '@/lib/queries';
 import { FULL_DISCLAIMER, PublicScreen } from './public-screen';
 import { AppButton, GlassPanel, PosaText as Text } from './posa-ui';
 import { colors } from './posa-theme';
+import { EMPTY_RESULTS, SeveritySummary, SleepResultsPanel } from './sleep-results';
 
 const dateLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -51,6 +52,8 @@ export default function PatientResult({ token, onBack }: { token: string; onBack
                 <Fact label="Lead" value={study.leadConfiguration ?? '—'} />
               </View>
             </GlassPanel>
+            <SeveritySummary ahi={EMPTY_RESULTS.ahi} />
+            <SleepResultsPanel results={EMPTY_RESULTS} audience="patient" />
             <Text style={styles.disclaimer}>{FULL_DISCLAIMER}</Text>
             <Text style={styles.expiry}>This link works until {dateLabel(study.expiresAt)}.</Text>
           </>

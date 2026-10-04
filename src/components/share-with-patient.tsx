@@ -34,7 +34,7 @@ export default function ShareWithPatient({ patientId }: { patientId: string }) {
   return (
     <GlassPanel style={styles.panel}>
       <Text style={styles.heading}>Patient dashboard link</Text>
-      <Text style={styles.copy}>The patient scans the QR code or opens the link to see their dashboard: every night recorded for them, including later ones. It shows no name or personal details, and stops working after it expires.</Text>
+      <Text style={styles.copy}>For the patient&apos;s POSA app: they open the app, choose <Text style={styles.strong}>I&apos;m a patient</Text>, then <Text style={styles.strong}>Scan QR</Text> (or <Text style={styles.strong}>Paste link</Text> if you sent the link). On a phone with POSA installed, tapping the link opens it directly. It shows every night recorded for them, no name or personal details, and stops working after it expires.</Text>
       {link ? (
         <View style={styles.result}>
           <View accessibilityRole="image" accessibilityLabel="QR code for the patient's dashboard link" style={styles.qr}>
@@ -59,6 +59,7 @@ const styles = StyleSheet.create({
   panel: { gap: 12 },
   heading: { color: colors.text, fontSize: 18, fontWeight: '700' },
   copy: { color: colors.text, fontSize: 14, lineHeight: 21 },
+  strong: { fontWeight: '800' },
   result: { alignItems: 'center', gap: 12 },
   qr: { padding: 14, borderRadius: 20, backgroundColor: '#FFFFFF' },
   linkBox: { alignSelf: 'stretch', padding: 10, borderRadius: 12, backgroundColor: colors.scrim, borderWidth: 1, borderColor: colors.border },

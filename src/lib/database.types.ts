@@ -301,7 +301,7 @@ export type Database = {
       }
       report_pdfs: {
         Row: {
-          approved_at: string | null
+          approved_at: string
           approved_by_name: string | null
           created_at: string
           created_by: string
@@ -310,7 +310,7 @@ export type Database = {
           storage_path: string
         }
         Insert: {
-          approved_at?: string | null
+          approved_at: string
           approved_by_name?: string | null
           created_at?: string
           created_by: string
@@ -319,7 +319,7 @@ export type Database = {
           storage_path: string
         }
         Update: {
-          approved_at?: string | null
+          approved_at?: string
           approved_by_name?: string | null
           created_at?: string
           created_by?: string

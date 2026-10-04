@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import Svg, { Line, Path, Rect, Text as SvgText } from 'react-native-svg';
 import { AppButton, GlassPanel, PageIntro, PosaText as Text, pressX } from '@/components/posa-ui';
 import ShareWithPatient from '@/components/share-with-patient';
+import { EMPTY_RESULTS, SleepResultsPanel } from '@/components/sleep-results';
 import * as Linking from 'expo-linking';
 import { exportReportPdf, reportPdfBlob } from '@/components/report-export';
 import { useAuth } from '@/lib/auth-context';
@@ -106,9 +107,9 @@ export default function SummaryScreen() {
     setArchiving(true);
     try {
       const pdf = await reportPdfBlob({ study: { ...study, reportStatus: 'Approved' }, generatedBy, sample, report: signed });
-      await saveReportPdf(uploadId, study.studyId, pdf, { approvedByName: signed.approvedByName, approvedAt: signed.approvedAt });
+      const result = await saveReportPdf(uploadId, study.studyId, pdf, { approvedByName: signed.approvedByName, approvedAt: signed.approvedAt });
       setPdfs(await listReportPdfs(uploadId));
-      setMessage('Approved, signed and saved to Supabase.');
+      setMessage(result === 'saved' ? 'Approved, signed and saved to Supabase.' : 'This approved version is already saved in Supabase. Nothing was saved again.');
     } catch (reason) { setMessage(`Approved and signed, but the PDF was not saved: ${messageOf(reason, 'unknown error')}. Use "Save PDF to Supabase" to try again.`); }
     finally { setArchiving(false); }
   };
@@ -117,7 +118,7 @@ export default function SummaryScreen() {
     catch (reason) { setMessage(messageOf(reason, 'Could not open the PDF.')); }
   };
   const latestSaved = pdfs[0];
-  const needsArchive = Boolean(uploadId) && locked && (!latestSaved || latestSaved.approvedAt !== report.approvedAt);
+  const needsArchive = Boolean(uploadId) && locked && (!latestSaved || !latestSaved.approvedAt || !report.approvedAt || new Date(latestSaved.approvedAt).getTime() !== new Date(report.approvedAt).getTime());
   const stepBack = async () => {
     const back: ReportStatus = status === 'Approved' ? 'Reviewed' : 'Draft';
     if (await moveTo(back) || !uploadId) setMessage(back === 'Reviewed' ? 'Approval undone. The report is back to Reviewed and can be edited.' : 'Review undone. The report is back to Draft.');
@@ -148,6 +149,8 @@ export default function SummaryScreen() {
       <Metric label="SDNN" value={metrics ? `${metrics.sdnnMs} ms` : '—'} />
       <Metric label="RMSSD / valid RR" value={metrics ? `${metrics.rmssdMs} ms · ${metrics.validRrPercent.toFixed(1)}%` : '—'} />
     </View>
+    {/* AHI / events / ODI: shown as "—" until the analysis output provides them */}
+    <SleepResultsPanel results={EMPTY_RESULTS} audience="clinician" />
     {!sample ? <GlassPanel style={styles.empty}><Text style={styles.copy}>Model analysis metrics and charts are unavailable. This preview reads file metadata only.</Text></GlassPanel> : null}
 
     <GlassPanel style={styles.reportPanel}>
