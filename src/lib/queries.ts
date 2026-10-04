@@ -448,3 +448,35 @@ export async function reportPdfUrl(storagePath: string): Promise<string> {
   if (error) throw error;
   return data.signedUrl;
 }
+
+// ---- Deletion log (who deleted / restored which study) ----
+
+export type DeletionLogEntry = {
+  id: number;
+  action: 'soft_delete' | 'restore';
+  createdAt: string;
+  actorName: string;
+  actorIsMe: boolean;
+  uploadId: string | null;
+  recordCode: string | null;
+  subjectCode: string | null; // this clinician's own label for the patient
+  currentlyDeleted: boolean;
+};
+
+// Entries for every patient this clinician is attached to, newest first
+// (20261004000009_deletion_log.sql).
+export async function getDeletionLog(limit = 200): Promise<DeletionLogEntry[]> {
+  const { data, error } = await supabase.rpc('get_deletion_log', { p_limit: limit });
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.id,
+    action: row.action === 'restore' ? 'restore' : 'soft_delete',
+    createdAt: row.created_at,
+    actorName: row.actor_name,
+    actorIsMe: row.actor_is_me,
+    uploadId: row.ecg_upload_id,
+    recordCode: row.record_code,
+    subjectCode: row.subject_code,
+    currentlyDeleted: row.currently_deleted,
+  }));
+}

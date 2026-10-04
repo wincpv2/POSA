@@ -3,9 +3,8 @@ import { Picker } from '@expo/ui/community/picker';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
-import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
+import { AppButton, GlassPanel, PageIntro, PosaText as Text, pressX } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
-import EcgReviewDemo from '@/components/ecg-review-demo';
 import { colors, fonts } from '@/components/posa-theme';
 
 const plot = { left: 78, right: 980, top: 46, bottom: 420 };
@@ -23,7 +22,6 @@ export default function DetailScreen() {
   const requested = Number(params.time);
   const [current, setCurrent] = useState(Number.isFinite(requested) ? Math.max(0, Math.min(durationSeconds, requested)) : 5);
   const [playing, setPlaying] = useState(false);
-  const [demo, setDemo] = useState(false);
   const [speed, setSpeed] = useState('1');
   const [signal, setSignal] = useState('Filtered');
   const [windowSize, setWindowSize] = useState('2.5');
@@ -71,8 +69,9 @@ export default function DetailScreen() {
       : [...study.events].reverse().find((item) => seconds(item.start) < current);
     if (event) setCurrent(seconds(event.start));
   };
-  const seekPlot = (x: number) => setCurrent(Math.max(0, Math.min(durationSeconds, start + x / chartWidth * visibleSeconds)));
-  const seekNight = (x: number) => setCurrent(Math.max(0, Math.min(durationSeconds, x / timelineWidth * durationSeconds)));
+  const seekTo = (t: number) => { if (Number.isFinite(t)) setCurrent(Math.max(0, Math.min(durationSeconds, t))); };
+  const seekPlot = (x: number) => seekTo(start + x / Math.max(chartWidth, 1) * visibleSeconds);
+  const seekNight = (x: number) => seekTo(x / Math.max(timelineWidth, 1) * durationSeconds);
 
   if (study.status !== 'ready') return <View style={styles.gate}><Text style={styles.title}>No completed study to inspect</Text><Text style={styles.copy}>Upload a recording and finish the preview first.</Text><AppButton href="/upload"><Text style={styles.buttonText}>Go to upload</Text></AppButton></View>;
 
@@ -81,7 +80,6 @@ export default function DetailScreen() {
   return <ScrollView style={styles.scroll} contentContainerStyle={[styles.page, wide && styles.pageWide]}>
     <PageIntro eyebrow="STUDY DETAIL" title={study.studyId || 'Study'} description={meta} />
 
-    {demo ? <EcgReviewDemo onExit={() => setDemo(false)} /> : <>
     <View style={styles.stats}>
       <Stat label="Elapsed time" value={timeLabel(current)} sub={`of ${timeLabel(durationSeconds)}`} />
       <Stat label="Heart rate" value={sample ? `${heartRate} bpm` : '—'} sub={sample ? 'Illustrative sample' : 'Needs ECG samples'} />
@@ -111,7 +109,7 @@ export default function DetailScreen() {
 
       <GlassPanel style={styles.chartPanel}>
         <View style={styles.chartHead}><Text style={styles.chartTitle}>{signal} ECG</Text><Text style={styles.rr}>R-R {rrInterval} ms</Text></View>
-        <Pressable accessibilityRole="image" accessibilityLabel={`${signal} ECG waveform. Tap to seek within the current elapsed-time window.`} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} onPress={(event) => seekPlot(event.nativeEvent.locationX)} style={[styles.chartTouch,{height:wide?Math.min(520,width*0.3):320}]}>
+        <Pressable accessibilityRole="image" accessibilityLabel={`${signal} ECG waveform. Tap to seek within the current elapsed-time window.`} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} onPress={(event) => { const x = pressX(event); if (x !== null) seekPlot(x); }} style={[styles.chartTouch,{height:wide?Math.min(520,width*0.3):320}]}>
           <Svg width="100%" height="100%" viewBox="0 0 1000 520" preserveAspectRatio="none">
             <Rect x="0" y="0" width="1000" height="520" fill="#061417"/>
             {Array.from({ length: 19 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * 20} y2={plot.top + index * 20} stroke={index % 4 === 0 ? '#28434a' : '#152c31'} strokeWidth={index % 4 === 0 ? 1.2 : 0.7}/>)}
@@ -132,7 +130,7 @@ export default function DetailScreen() {
         <View onLayout={(event) => setTimelineWidth(event.nativeEvent.layout.width)} style={styles.timeline}>
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>{study.events.map((event) => <View key={event.id} style={[styles.nightEvent,{left:`${seconds(event.start)/durationSeconds*100}%`,width:`${Math.max(0.15,(seconds(event.end)-seconds(event.start))/durationSeconds*100)}%`}]}/>)}</View>
           <View pointerEvents="none" style={[styles.currentPosition,{left:`${current/durationSeconds*100}%`}]}/>
-          <Pressable accessibilityRole="button" accessibilityLabel="Seek across the full-night recording" onPress={(event) => seekNight(event.nativeEvent.locationX)} style={StyleSheet.absoluteFill}/>
+          <Pressable accessibilityRole="button" accessibilityLabel="Seek across the full-night recording" onPress={(event) => { const x = pressX(event); if (x !== null) seekNight(x); }} style={StyleSheet.absoluteFill}/>
         </View>
         <View style={styles.nightAxis}><Text style={styles.axisText}>00:00:00</Text><Text style={styles.axisText}>{timeLabel(durationSeconds/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds*2/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds)}</Text></View>
       </GlassPanel>
@@ -140,9 +138,7 @@ export default function DetailScreen() {
       <Text style={styles.emptyMark}>∿</Text>
       <Text style={styles.chartTitle}>Analysis is not connected yet</Text>
       <Text style={styles.emptyCopy}>The recording is stored securely. The ECG waveform, heart rate and apnea events will appear here once the analysis model is connected.</Text>
-      <AppButton variant="quiet" onPress={() => setDemo(true)}><Text style={styles.quietText}>Try the review tools with demo data</Text></AppButton>
     </GlassPanel>}
-    </>}
 
     <View style={styles.footer}>
       <AppButton variant="quiet" onPress={() => router.push('/')} style={styles.footerButton}><Text style={styles.quietText}>Back to Home</Text></AppButton>

@@ -6,7 +6,7 @@ import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
 import { sampleEvents, useUploadState, type ApneaEvent, type Study, type SummaryMetrics } from '@/components/posa-state';
 import { colors, fonts } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { listRecentEcgUploads, restoreEcgUpload, softDeleteEcgUpload, timeAgo, type RecentEcgUpload } from '@/lib/queries';
+import { getDeletionLog, listRecentEcgUploads, restoreEcgUpload, softDeleteEcgUpload, timeAgo, type DeletionLogEntry, type RecentEcgUpload } from '@/lib/queries';
 
 type StudyStatus = 'Awaiting analysis' | 'Needs review' | 'Processing' | 'Approved' | 'Failed';
 // The illustrative sample studies from the team's UI (shown after real uploads,
@@ -55,6 +55,13 @@ export default function HomeScreen() {
   const [filter, setFilter] = useState<(typeof filterLabels)[number]>('All');
 
   const [reloadKey, setReloadKey] = useState(0);
+  const [logKey, setLogKey] = useState(0);
+  const [recentLog, setRecentLog] = useState<DeletionLogEntry[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getDeletionLog(3).then((rows) => { if (!cancelled) setRecentLog(rows); }).catch(() => { if (!cancelled) setRecentLog([]); });
+    return () => { cancelled = true; };
+  }, [logKey]);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleted, setDeleted] = useState<{ id: string; code: string } | null>(null);
@@ -80,6 +87,7 @@ export default function HomeScreen() {
       await softDeleteEcgUpload(upload.id);
       setRecords((rows) => rows.filter((row) => row.upload?.id !== upload.id));
       setDeleted({ id: upload.id, code: record.id });
+      setLogKey((k) => k + 1);
       if (study.uploadId === upload.id) reset();
     } catch (reason) { setActionError(messageOf(reason, 'Could not delete the study.')); }
     finally { setBusyId(null); setConfirmId(null); }
@@ -87,7 +95,7 @@ export default function HomeScreen() {
   const undo = async () => {
     if (!deleted) return;
     setActionError('');
-    try { await restoreEcgUpload(deleted.id); setDeleted(null); setReloadKey((k) => k + 1); }
+    try { await restoreEcgUpload(deleted.id); setDeleted(null); setReloadKey((k) => k + 1); setLogKey((k) => k + 1); }
     catch (reason) { setActionError(messageOf(reason, 'Could not restore the study.')); }
   };
 
@@ -168,6 +176,10 @@ export default function HomeScreen() {
           <Text style={styles.sectionTitle}>Recent activity</Text>
           <View style={styles.activityList}>{records.slice(0, 5).map((record) => <View key={record.upload?.id ?? record.id} style={styles.activityRow}><Text style={styles.activityTitle}>Uploaded {record.id}</Text><Text style={styles.activityTime}>{record.ago}</Text></View>)}{!records.length && !loading ? <Text style={styles.subCopy}>Nothing yet.</Text> : null}</View>
         </GlassPanel>
+        <GlassPanel style={styles.sidePanel}>
+          <View style={styles.logHead}><Text style={styles.sectionTitle}>Deletion log</Text><Pressable accessibilityRole="link" onPress={() => router.push('/activity' as never)} style={styles.logAll}><Text selectable={false} style={styles.logAllText}>View all</Text></Pressable></View>
+          <View style={styles.activityList}>{recentLog.length ? recentLog.map((e) => <View key={e.id} style={styles.activityRow}><Text style={styles.activityTitle}>{e.actorIsMe ? 'You' : e.actorName} {e.action === 'soft_delete' ? 'deleted' : 'restored'} {e.recordCode ?? 'a study'}</Text><Text style={styles.activityTime}>{timeAgo(e.createdAt)}</Text></View>) : <Text style={styles.subCopy}>No deletions.</Text>}</View>
+        </GlassPanel>
       </View>
     </View>
   </ScrollView>;
@@ -204,6 +216,7 @@ function Kpi({ value, label }: { value: string; label: string }) { return <View 
 
 const styles = StyleSheet.create({
   idRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, sampleTag: { color: colors.accentText, backgroundColor: '#FFD166', fontSize: 11, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, overflow: 'hidden' },
+  logHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, logAll: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 6, cursor: 'pointer' } as never, logAllText: { color: colors.accent, fontSize: 14, fontWeight: '800', textDecorationLine: 'underline' },
   rowWrap: { flexDirection: 'row', alignItems: 'stretch', gap: 6 }, rowMain: { flex: 1 },
   trash: { width: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: 'rgba(2,3,58,0.42)' },
   confirmRow: { borderWidth: 1, borderColor: colors.coral },

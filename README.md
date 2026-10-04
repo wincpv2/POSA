@@ -35,8 +35,8 @@
   (เฉพาะการตรวจที่ตัวเองอัปโหลด)
 - **Upload:** อัปโหลดไฟล์ EDF, WFDB (`.hea` + `.dat`) หรือรูปภาพ ขึ้น Storage แบบ private
   อ่าน sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม
-- **Detail:** หน้าดูสัญญาณ ECG และเครื่องมือรีวิวแบบ **DEMO** (ข้อมูลจำลองในรูปแบบ output ของโมเดล)
-  ซูมด้วยล้อเมาส์หรือถ่างนิ้ว, ปรับ gain, ดู R-R / EDR / ความน่าจะเป็นรายนาที, ยืนยันหรือปฏิเสธ apnea run
+- **Detail:** หน้าดูสัญญาณ ECG (เล่น, ซูม, เลือกช่วงเวลา, เลื่อนไป apnea event ก่อนหน้า/ถัดไป)
+  ตอนนี้แสดงกราฟได้เฉพาะรายการตัวอย่าง (SAMPLE) ส่วนการตรวจจริงจะแสดงเมื่อเชื่อมต่อ API ของ ML แล้ว
 - **Summary / Report:**
   - แพทย์เขียน **Clinician opinion** และ **Patient explanation** เอง แล้วบันทึกลงฐานข้อมูล
   - สถานะ Draft → Reviewed → Approved และย้อนกลับได้
@@ -44,7 +44,9 @@
   - **Export PDF / Print** ฉบับที่ยังไม่ Approved จะมีลายน้ำ DRAFT / REVIEWED
   - **ฉบับ Approved เก็บเป็น PDF ใน Supabase อัตโนมัติ** มีหลายเวอร์ชันได้ และดาวน์โหลดย้อนหลังได้
 - **ลิงก์ Dashboard ผู้ป่วย:** สร้าง QR code และลิงก์ให้ผู้ป่วย อายุ 90 วัน
-- **เมนูบัญชี:** มุมขวาบน มีชื่อและปุ่ม Sign out
+- **Deletion log:** ดูว่าใครลบหรือกู้คืนการตรวจไหน เมื่อไหร่ ของผู้ป่วยทุกคนที่ตัวเองผูกอยู่ รวมถึงที่หมอคนอื่นทำ
+  (มีกล่องสรุปในหน้า Home และหน้าเต็มที่ `/activity`) แก้หรือลบ log ไม่ได้
+- **เมนูบัญชี:** มุมขวาบน มีชื่อ, Deletion log และปุ่ม Sign out
 
 ### ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
 - **Scan QR** (ค่าเริ่มต้น) หรือ **Paste link** เพื่อเปิด Dashboard ของตัวเอง
@@ -101,7 +103,7 @@ npx expo lint
 
 ## Backend (Supabase)
 
-Migration ทั้งหมดอยู่ใน `supabase/migrations/` (17 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
+Migration ทั้งหมดอยู่ใน `supabase/migrations/` (18 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
 
 ```bash
 npx supabase login
@@ -136,6 +138,7 @@ npx supabase gen types typescript --linked > src/lib/database.types.ts
 | `study_reports_sign_off` (trigger) | บังคับลำดับสถานะ, ลงชื่อและเวลา, ล็อกรายงานที่ Approved |
 | `soft_delete_ecg_upload` / `restore_ecg_upload` | ลบหรือกู้คืนการตรวจ (เฉพาะคนที่อัปโหลด) และบันทึกลง `audit_log` |
 | `get_shared_study` | ข้อมูลผลตรวจรายครั้งสำหรับผู้ป่วยที่ไม่ได้ login |
+| `get_deletion_log` | อ่าน log การลบและกู้คืน เฉพาะผู้ป่วยที่หมอคนนั้นผูกอยู่ |
 | `get_patient_dashboard` | ข้อมูล Dashboard ผู้ป่วย (คืนเป็น JSON เพื่อเพิ่มพารามิเตอร์ได้ภายหลัง) |
 | `hook_restrict_signup_domain` | Auth hook จำกัดการสมัครเฉพาะ `@email.kmutnb.ac.th` **(สร้างไว้แล้วแต่ยังปิดอยู่)** |
 
@@ -150,11 +153,12 @@ src/
     _layout.tsx        ตัวกั้น login + เลือกบทบาท
     index.tsx          Home (รายการการตรวจ, ลบ/Undo)
     upload.tsx         อัปโหลดการตรวจ
-    detail.tsx         ดูสัญญาณ + demo เครื่องมือรีวิว
+    detail.tsx         ดูสัญญาณ ECG
     summary.tsx        รายงาน, ลงนาม, PDF
+    activity.tsx       Deletion log
     p/[token].tsx      Dashboard ผู้ป่วย (ลิงก์)
     shared/[token].tsx ผลตรวจรายครั้ง (ลิงก์)
-  components/          UI และหน้าจอฝั่งผู้ป่วย, report-export (PDF), ecg-mock (ข้อมูล DEMO)
+  components/          UI และหน้าจอฝั่งผู้ป่วย, report-export (PDF)
   lib/
     supabase.ts        Supabase client (ใช้แค่ publishable key)
     auth-context.tsx   Google login, session, สร้าง profile

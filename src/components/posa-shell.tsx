@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Link, Slot, usePathname } from 'expo-router';
+import { Link, Slot, router, usePathname } from 'expo-router';
 import { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -83,11 +83,11 @@ function Workspace() {
         })}
       </View>
     </View>
-    {menuOpen ? <AccountMenu name={displayName} email={email} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} /> : null}
+    {menuOpen ? <AccountMenu name={displayName} email={email} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} onOpenLog={() => { setMenuOpen(false); router.push('/activity' as never); }} /> : null}
   </View>;
 }
 
-function AccountMenu({ name, email, onClose, onSignOut }: { name: string; email: string; onClose: () => void; onSignOut: () => void }) {
+function AccountMenu({ name, email, onClose, onSignOut, onOpenLog }: { name: string; email: string; onClose: () => void; onSignOut: () => void; onOpenLog: () => void }) {
   return <>
     <Pressable accessibilityLabel="Close account menu" onPress={onClose} style={styles.menuBackdrop} />
     <View accessibilityRole="menu" style={[styles.menu, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
@@ -96,6 +96,10 @@ function AccountMenu({ name, email, onClose, onSignOut }: { name: string; email:
         {email && email !== name ? <PosaText style={styles.menuEmail}>{email}</PosaText> : null}
       </View>
       <View style={styles.menuDivider} />
+      <Pressable accessibilityRole="menuitem" onPress={onOpenLog} style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
+        <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={colors.text} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><Path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></Svg>
+        <PosaText selectable={false} style={styles.menuLog}>Deletion log</PosaText>
+      </Pressable>
       <Pressable accessibilityRole="menuitem" onPress={onSignOut} style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
         <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={colors.coral} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><Path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10" /></Svg>
         <PosaText style={styles.menuSignOut}>Sign out</PosaText>
@@ -122,7 +126,7 @@ const styles = StyleSheet.create({
   menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
   menuIdentity: { paddingHorizontal: 12, paddingVertical: 10, gap: 2 }, menuName: { color: colors.text, fontSize: 15, fontWeight: '800' }, menuEmail: { color: colors.muted, fontSize: 13 },
   menuDivider: { height: 1, marginHorizontal: 8, backgroundColor: colors.border },
-  menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' },
+  menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' }, menuLog: { color: colors.text, fontSize: 14, fontWeight: '700' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
   navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },

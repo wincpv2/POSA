@@ -34,7 +34,7 @@ export default function PatientAccess({ onBack, onToken }: { onBack: () => void;
 function Segment({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="tab" accessibilityState={{ selected: active }} onPress={onPress} style={[styles.segmentItem, active && styles.segmentActive]}>
-      <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{label}</Text>
+      <Text selectable={false} style={[styles.segmentText, active && styles.segmentTextActive]}>{label}</Text>
     </Pressable>
   );
 }
@@ -110,7 +110,7 @@ const styles = StyleSheet.create({
   heading: { color: colors.text, fontSize: 18, fontWeight: '700' },
   copy: { color: colors.text, fontSize: 14, lineHeight: 21 },
   segment: { flexDirection: 'row', padding: 4, gap: 4, borderRadius: 999, backgroundColor: colors.panelDeep, borderWidth: 1, borderColor: colors.border },
-  segmentItem: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 999 },
+  segmentItem: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 999, cursor: 'pointer', userSelect: 'none' } as never,
   segmentActive: { backgroundColor: colors.accent },
   segmentText: { color: colors.text, fontSize: 14, fontWeight: '700' },
   segmentTextActive: { color: colors.accentText },

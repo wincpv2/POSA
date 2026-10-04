@@ -469,6 +469,20 @@ export type Database = {
     }
     Functions: {
       account_display_name: { Args: { p_user: string }; Returns: string }
+      get_deletion_log: {
+        Args: { p_limit?: number }
+        Returns: {
+          action: string
+          actor_is_me: boolean
+          actor_name: string
+          created_at: string
+          currently_deleted: boolean
+          ecg_upload_id: string
+          id: number
+          record_code: string
+          subject_code: string
+        }[]
+      }
       get_patient_dashboard: { Args: { p_token: string }; Returns: Json }
       get_shared_study: {
         Args: { p_token: string }
