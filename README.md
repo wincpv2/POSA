@@ -3,8 +3,7 @@
 แอป React Native (Expo) สำหรับแพทย์และบุคลากรห้องแล็บการนอนหลับ ใช้อัปโหลดสัญญาณ ECG ของผู้ป่วย
 ดูผลการตรวจ เขียนรายงานและลงนาม แล้วส่งผลให้ผู้ป่วยดูผ่าน QR code หรือลิงก์ได้
 
-> **สถานะ:** ส่วน backend, การ login และการอัปโหลดใช้งานกับ Supabase ได้จริงแล้ว ส่วนการวิเคราะห์ด้วยโมเดล ML
-> **ยังไม่ได้เชื่อมต่อ** ผลวิเคราะห์ที่เห็นในแอปตอนนี้เป็นข้อมูลตัวอย่าง (DEMO) ทั้งหมด
+> **สถานะ:** App uploads real WFDB recordings to Supabase and sends them to the local SE-ResNet50-1D inference service. Model results are persisted for clinician review.
 
 ผู้ดูแลส่วน backend / database: Panut Anan ([@tonnow2005](https://github.com/tonnow2005), panuttonnow520@gmail.com)
 
@@ -24,8 +23,7 @@
 - **Login:** Google OAuth ผ่าน Supabase Auth
 - **PDF:** `expo-print` บนมือถือ และ `html2pdf.js` บนเว็บ
 - **QR:** `expo-camera` สำหรับสแกน และ `react-native-qrcode-svg` สำหรับสร้าง
-- **ML (กำลังทำ):** CatBoost / XGBoost / CNN ensemble บน feature จาก ECG (RRI, EDR, CPC, STFT/CWT)
-  เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
+- **ML:** Trained SE-ResNet50-1D checkpoint; per-minute inference on 100 Hz ECG.
 
 ## ฟีเจอร์
 
@@ -184,3 +182,21 @@ supabase/migrations/   schema, RLS และฟังก์ชันทั้ง
 - พารามิเตอร์ใน Dashboard ผู้ป่วย (รอตกลงกับทีม)
 - Tier 3: ปุ่มขอลบบัญชีหรือข้อมูล, Privacy Policy, บัญชีสำหรับ reviewer
 - ทดสอบบนมือถือจริง (ตอนนี้ทดสอบบนเว็บเป็นหลัก)
+
+## Local trained model inference
+
+The app now sends uploaded WFDB records to a local FastAPI service. The service runs the SE-ResNet50-1D checkpoint on complete 60-second, 100 Hz ECG windows and saves per-minute probabilities and classes in Supabase. Only clinician-approved aggregate results are returned to patient links.
+
+1. Apply `supabase/migrations/20261004000010_ml_predictions.sql` to the project database before using inference. This adds run/result tables and updates patient result RPCs.
+2. Copy `inference/.env.example` to `inference/.env`. Set `POSA_MODEL_PATH` to the local `se_resnet50_epoch_05.pt`, and set the server-side `SUPABASE_URL`, publishable key, and **service role key**. Keep this file private; the service role key must never go in the Expo `.env`.
+3. Create a Python environment and install `inference/requirements.txt`. Install a PyTorch build separately if the machine does not already provide one; CPU inference is supported.
+4. Start the API from the repository root with `python -m uvicorn inference.service:app --host 0.0.0.0 --port 8010`.
+5. Set `EXPO_PUBLIC_INFERENCE_API_URL=http://localhost:8010` in the app `.env` and start Expo. Use a device-visible host address instead of `localhost` when running the app on a physical phone.
+
+The upload accepts one matching `.hea`/`.dat` pair at exactly 100 Hz. The ECG detail view displays the stored signal and model probability for each minute. Model outputs are research predictions, not a diagnosis.
+
+To smoke-check the checkpoint on the first four records of the notebook's recreated held-out Test split, run:
+
+`python -m inference.smoke_test --data-dir "D:/path/to/apnea-ecg-data" --model "D:/path/to/se_resnet50_epoch_05.pt"`
+
+The script requires the matching 78-record annotation set used by the notebook. The currently configured dataset folder has a different record count, so it cannot verify the held-out split until the matching data folder is supplied.

@@ -176,6 +176,48 @@ export type Database = {
           },
         ]
       }
+      ecg_symptom_events: {
+        Row: {
+          id: string
+          ecg_upload_id: string
+          occurred_at_seconds: number
+          symptoms: string[]
+          created_by: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          ecg_upload_id: string
+          occurred_at_seconds: number
+          symptoms: string[]
+          created_by?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          ecg_upload_id?: string
+          occurred_at_seconds?: number
+          symptoms?: string[]
+          created_by?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ecg_symptom_events_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ecg_symptom_events_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: false
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       models: {
         Row: {
           artifact_path: string | null
@@ -206,6 +248,72 @@ export type Database = {
           model_type?: string
           name?: string
           version?: string
+        }
+        Relationships: []
+      }
+      prediction_runs: {
+        Row: {
+          id: string
+          ecg_upload_id: string
+          model_id: string
+          status: string
+          progress_percent: number
+          total_minutes: number | null
+          apnea_minutes: number | null
+          apnea_percent: number | null
+          error_message: string | null
+          created_at: string
+          started_at: string | null
+          completed_at: string | null
+        }
+        Insert: {
+          id?: string
+          ecg_upload_id: string
+          model_id: string
+          status?: string
+          progress_percent?: number
+          total_minutes?: number | null
+          apnea_minutes?: number | null
+          apnea_percent?: number | null
+          error_message?: string | null
+          created_at?: string
+          started_at?: string | null
+          completed_at?: string | null
+        }
+        Update: {
+          id?: string
+          ecg_upload_id?: string
+          model_id?: string
+          status?: string
+          progress_percent?: number
+          total_minutes?: number | null
+          apnea_minutes?: number | null
+          apnea_percent?: number | null
+          error_message?: string | null
+          created_at?: string
+          started_at?: string | null
+          completed_at?: string | null
+        }
+        Relationships: []
+      }
+      prediction_minutes: {
+        Row: {
+          run_id: string
+          minute_index: number
+          apnea_probability: number
+          is_apnea: boolean
+        }
+        Insert: {
+          run_id: string
+          minute_index: number
+          apnea_probability: number
+          is_apnea: boolean
+        }
+        Update: {
+          run_id?: string
+          minute_index?: number
+          apnea_probability?: number
+          is_apnea?: boolean
         }
         Relationships: []
       }
@@ -493,6 +601,11 @@ export type Database = {
           record_code: string
           sampling_rate_hz: number
           status: string
+          apnea_minutes: number | null
+          total_minutes: number | null
+          apnea_percent: number | null
+          patient_explanation: string | null
+          approved_at: string | null
         }[]
       }
       hook_restrict_signup_domain: { Args: { event: Json }; Returns: Json }

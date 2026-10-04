@@ -1,0 +1,9 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-dotenv>=1,<2
+numpy>=1.26,<3
+wfdb>=4.2,<5
+scipy>=1.12,<2
+supabase>=2,<3
+# Install a CUDA-appropriate PyTorch wheel separately when GPU inference is desired.
+# CPU inference works with a standard PyTorch installation.

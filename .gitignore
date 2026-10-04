@@ -2,6 +2,8 @@
 
 # dependencies
 node_modules/
+__pycache__/
+*.py[cod]
 
 # Expo
 .expo/
@@ -45,6 +47,12 @@ example
 # secrets (real values live in .env; .env.example is the committed template)
 .env
 !.env.example
+inference/.env
+inference/.venv/
+expo-web.log
+expo-web-error.log
+inference-server.log
+inference-server-error.log
 
 # Supabase CLI local state
 supabase/.temp/

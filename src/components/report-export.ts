@@ -2,7 +2,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
-import type { StudyReport } from '@/lib/queries';
+import type { EcgSymptomEvent, PredictionRun, StudyReport } from '@/lib/queries';
 
 import type { Study } from './posa-state';
 import { FULL_DISCLAIMER } from './public-screen';
@@ -14,8 +14,8 @@ import { FULL_DISCLAIMER } from './public-screen';
 //   window.print()), so the report is printed from a hidden iframe instead.
 //   Choosing "Save as PDF" in the browser's dialog produces the PDF.
 
-// report: the clinician-written part from Supabase (null for sample studies).
-export type ReportOptions = { study: Study; generatedBy: string; sample: boolean; report?: StudyReport | null };
+// report: the clinician-written part from Supabase for uploaded studies.
+export type ReportOptions = { study: Study; generatedBy: string; prediction: PredictionRun | null; report?: StudyReport | null; symptomEvents?: EcgSymptomEvent[] };
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 const row = (label: string, value: string | null | undefined) => `<tr><th>${escape(label)}</th><td>${escape(value && value.trim() ? value : '—')}</td></tr>`;
@@ -24,20 +24,20 @@ const cell = (label: string, value: string | null | undefined) => `<div class="k
 const paragraphs = (text: string) => text.split(/\n{2,}/).map((p) => `<p>${escape(p).replace(/\n/g, '<br />')}</p>`).join('');
 const signed = (name: string | null | undefined, at: string | null | undefined) => name && at ? `${escape(name)} · ${escape(new Date(at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}` : '';
 
-export function reportHtml({ study, generatedBy, sample, report }: ReportOptions): string {
+export function reportHtml({ study, generatedBy, prediction, report, symptomEvents = [] }: ReportOptions): string {
   const approved = study.reportStatus === 'Approved';
-  const m = study.summaryMetrics;
   const generatedAt = new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
-  const results = sample
-    ? `<div class="grid">
-        ${cell('Apnea burden', study.apneaBurden)}
-        ${cell('Apnea minutes', study.apneaMinutes)}
-        ${cell('Minutes without events', study.noEventMinutes)}
-        ${cell('Apnea event intervals', String(study.events.length))}
-        ${m ? cell('Median heart rate', `${m.medianHrBpm} bpm`) + cell('SDNN / RMSSD', `${m.sdnnMs} ms / ${m.rmssdMs} ms`) + cell('Valid RR', `${m.validRrPercent.toFixed(1)}%`) : ''}
-      </div>
-      <p class="note">Illustrative sample values. No clinical interpretation.</p>`
-    : `<p>Analysis output is not connected yet. No clinical interpretation is available for this study.</p>`;
+  const completed = prediction?.status === 'completed';
+  const results = completed
+    ? `<div class="grid">${cell('Analysed minutes', String(prediction.total_minutes ?? '—'))}${cell('Apnea-classified minutes', String(prediction.apnea_minutes ?? '—'))}${cell('Apnea minute share', prediction.apnea_percent == null ? '—' : `${prediction.apnea_percent.toFixed(1)}%`)}</div><p class="note">Per-minute model classification at a 0.5 probability threshold. Clinician interpretation is required.</p>`
+    : `<p>No completed model analysis is available.</p>`;
+  const symptoms = symptomEvents.length
+    ? `<ul>${symptomEvents.map((event) => {
+      const seconds = Math.max(0, Math.floor(event.occurred_at_seconds));
+      const time = `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+      return `<li><b>${time}</b> · ${event.symptoms.map(escape).join(', ')}</li>`;
+    }).join('')}</ul>`
+    : '<p class="note">No symptoms recorded.</p>';
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" /><title>POSA report ${escape(study.studyId || '')}</title>
@@ -82,9 +82,12 @@ export function reportHtml({ study, generatedBy, sample, report }: ReportOptions
   <h2>Results</h2>
   ${results}
 
+  <h2>Symptoms recorded during playback</h2>
+  ${symptoms}
+
   <h2>Clinician report</h2>
   <p class="note">System findings</p>
-  <p>${sample ? `Illustrative sample: ${study.events.length} apnea event intervals across ${escape(study.duration || '—')} elapsed recording. This preview has no clinical interpretation.` : 'Analysis output is not connected. No clinical interpretation is available.'}</p>
+  <p>${completed ? `The model classified ${prediction.apnea_minutes ?? '—'} of ${prediction.total_minutes ?? '—'} analysed minutes as apnea (${prediction.apnea_percent?.toFixed(1) ?? '—'}%).` : 'No completed model result is available.'}</p>
   <p class="note">Clinician opinion</p>
   ${report?.clinicianOpinion.trim() ? paragraphs(report.clinicianOpinion) : '<p class="note">Not written yet.</p>'}
 
