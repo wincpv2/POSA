@@ -6,6 +6,7 @@ import { getPatientDashboard, type DashboardNight, type PatientDashboard as Dash
 import { FULL_DISCLAIMER, PublicScreen } from './public-screen';
 import { AppButton, GlassPanel, PosaText as Text } from './posa-ui';
 import { colors } from './posa-theme';
+import { EMPTY_RESULTS, SeveritySummary, SleepResultsPanel } from './sleep-results';
 
 const dateLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 const statusLabel = (status: string) => status === 'failed' ? 'Analysis failed' : 'Awaiting analysis';
@@ -57,6 +58,10 @@ export default function PatientDashboard({ token, onBack }: { token: string; onB
                 <ClinicianMessage night={latest} />
               </> : <Text style={styles.copy}>No nights recorded yet. Your clinician will add them after each sleep study.</Text>}
             </GlassPanel>
+            {latest ? <>
+              <SeveritySummary ahi={EMPTY_RESULTS.ahi} />
+              <SleepResultsPanel results={EMPTY_RESULTS} audience="patient" />
+            </> : null}
 
             {data.nights.length > 0 ? (
               <GlassPanel style={styles.panel}>

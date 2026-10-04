@@ -6,6 +6,7 @@ import type { EcgSymptomEvent, PredictionRun, StudyReport } from '@/lib/queries'
 
 import type { Study } from './posa-state';
 import { FULL_DISCLAIMER } from './public-screen';
+import { EMPTY_RESULTS, formatResult, hasLeadValue, RESULT_GROUPS, rowsOf, type SleepResults } from './sleep-results-data';
 
 // Builds the printable sleep-study report and exports it as PDF / prints it.
 // - iOS / Android: expo-print renders the HTML to a real PDF file, then the
@@ -15,7 +16,8 @@ import { FULL_DISCLAIMER } from './public-screen';
 //   Choosing "Save as PDF" in the browser's dialog produces the PDF.
 
 // report: the clinician-written part from Supabase for uploaded studies.
-export type ReportOptions = { study: Study; generatedBy: string; prediction: PredictionRun | null; report?: StudyReport | null; symptomEvents?: EcgSymptomEvent[] };
+// results: AHI / events / ODI (sleep-results-data.ts); "—" until provided.
+export type ReportOptions = { study: Study; generatedBy: string; prediction: PredictionRun | null; report?: StudyReport | null; symptomEvents?: EcgSymptomEvent[]; results?: SleepResults };
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
 const row = (label: string, value: string | null | undefined) => `<tr><th>${escape(label)}</th><td>${escape(value && value.trim() ? value : '—')}</td></tr>`;
@@ -24,13 +26,21 @@ const cell = (label: string, value: string | null | undefined) => `<div class="k
 const paragraphs = (text: string) => text.split(/\n{2,}/).map((p) => `<p>${escape(p).replace(/\n/g, '<br />')}</p>`).join('');
 const signed = (name: string | null | undefined, at: string | null | undefined) => name && at ? `${escape(name)} · ${escape(new Date(at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}` : '';
 
-export function reportHtml({ study, generatedBy, prediction, report, symptomEvents = [] }: ReportOptions): string {
+export function reportHtml({ study, generatedBy, prediction, report, symptomEvents = [], results: indexValues = EMPTY_RESULTS }: ReportOptions): string {
   const approved = study.reportStatus === 'Approved';
   const generatedAt = new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
   const completed = prediction?.status === 'completed';
   const results = completed
     ? `<div class="grid">${cell('Analysed minutes', String(prediction.total_minutes ?? '—'))}${cell('Apnea-classified minutes', String(prediction.apnea_minutes ?? '—'))}${cell('Apnea minute share', prediction.apnea_percent == null ? '—' : `${prediction.apnea_percent.toFixed(1)}%`)}</div><p class="note">Per-minute model classification at a 0.5 probability threshold. Clinician interpretation is required.</p>`
     : `<p>No completed model analysis is available.</p>`;
+  // AHI / Events Breakdown / ODI in the same 2-column label / value cells; English only.
+  const indicesMissing = Object.values(indexValues).every((v) => v === null);
+  const indices = RESULT_GROUPS.map((g) => `<h3>${escape(g.title)}</h3>
+    <div class="grid">
+      ${hasLeadValue(g) ? cell(g.leadLabel, formatResult(indexValues[g.lead], g.leadUnit)) : ''}
+      ${rowsOf(g).map((r) => cell(r.label, formatResult(indexValues[r.key], r.unit))).join('')}
+    </div>`).join('')
+    + (indicesMissing ? '<p class="note">— = not available yet. Values appear once the analysis provides them; ODI and SpO₂ also need a pulse-oximetry signal.</p>' : '');
   const symptoms = symptomEvents.length
     ? `<ul>${symptomEvents.map((event) => {
       const seconds = Math.max(0, Math.floor(event.occurred_at_seconds));
@@ -57,6 +67,9 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
   .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
   .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid #d5dde8; }
   .kv span { color: #44526b; } .kv b { text-align: right; }
+  h3 { font-size: 10.5pt; margin: 10px 0 2px; color: #0077B6; }
+  h2, h3 { break-after: avoid; page-break-after: avoid; }
+  .grid, .signoff, .disclaimer, .kv, tr { break-inside: avoid; page-break-inside: avoid; }
   .signoff td { height: 30px; }
   .disclaimer { margin-top: 16px; padding: 10px 12px; border: 1px solid #d5dde8; border-radius: 8px; font-size: 10.5pt; color: #44526b; }
   footer { margin-top: 10px; font-size: 9.5pt; color: #6b7891; }
@@ -81,6 +94,7 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
 
   <h2>Results</h2>
   ${results}
+  ${indices}
 
   <h2>Symptoms recorded during playback</h2>
   ${symptoms}
@@ -155,7 +169,7 @@ export async function reportPdfBlob(options: ReportOptions): Promise<Blob> {
   document.body.appendChild(host);
   try {
     return await html2pdf()
-      .set({ margin: [14, 16, 14, 16], image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } })
+      .set({ margin: [14, 16, 14, 16], image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'legacy'], avoid: ['.grid', '.signoff', '.disclaimer', '.kv', 'tr', 'h2', 'h3'] } } as never)
       .from(host)
       .outputPdf('blob');
   } finally {
