@@ -3,8 +3,9 @@ import { Picker } from '@expo/ui/community/picker';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
-import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
+import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
+import EcgReviewDemo from '@/components/ecg-review-demo';
 import { colors, fonts } from '@/components/posa-theme';
 
 const plot = { left: 78, right: 980, top: 46, bottom: 420 };
@@ -22,6 +23,7 @@ export default function DetailScreen() {
   const requested = Number(params.time);
   const [current, setCurrent] = useState(Number.isFinite(requested) ? Math.max(0, Math.min(durationSeconds, requested)) : 5);
   const [playing, setPlaying] = useState(false);
+  const [demo, setDemo] = useState(false);
   const [speed, setSpeed] = useState('1');
   const [signal, setSignal] = useState('Filtered');
   const [windowSize, setWindowSize] = useState('2.5');
@@ -74,23 +76,42 @@ export default function DetailScreen() {
 
   if (study.status !== 'ready') return <View style={styles.gate}><Text style={styles.title}>No completed study to inspect</Text><Text style={styles.copy}>Upload a recording and finish the preview first.</Text><AppButton href="/upload"><Text style={styles.buttonText}>Go to upload</Text></AppButton></View>;
 
+  const meta = [study.sampleRate ? `${study.sampleRate} Hz` : null, study.lead || null, study.age ? `${study.age} y` : null, study.sex || null].filter(Boolean).join(' · ') || 'Recording details unavailable';
+
   return <ScrollView style={styles.scroll} contentContainerStyle={[styles.page, wide && styles.pageWide]}>
-    <View style={styles.playerHeader}><View style={styles.timeRow}><Text style={styles.clock}>{timeLabel(current)} / {timeLabel(durationSeconds)}</Text><Text style={styles.heartRate}>{sample ? `HR ${heartRate} bpm` : 'HR —'}</Text></View><View style={[styles.classification, !sample && styles.classificationUnavailable]}><Text style={styles.classificationText}>{sample ? '✓ NORMAL · N' : 'Model output unavailable'}</Text></View></View>
-    <View style={styles.controls}>
-      <Control label={playbackActive ? 'Pause' : 'Play'} onPress={() => { if (playbackActive) setPlaying(false); else { if (current >= durationSeconds) setCurrent(0); setPlaying(true); } }} active={playbackActive} disabled={!sample}/>
-      <Text style={styles.controlLabel}>Speed</Text><Picker enabled={sample} selectedValue={speed} onValueChange={(value) => setSpeed(String(value))} style={styles.picker}>{['0.5','1','2'].map((value) => <Picker.Item key={value} value={value} label={`${value}×`}/>)}</Picker>
-      <Text style={styles.controlLabel}>Signal</Text><Picker enabled={sample} selectedValue={signal} onValueChange={(value) => setSignal(String(value))} style={styles.picker}>{['Filtered','Raw'].map((value) => <Picker.Item key={value} value={value} label={value}/>)}</Picker>
+    <PageIntro eyebrow="STUDY DETAIL" title={study.studyId || 'Study'} description={meta} />
+
+    {demo ? <EcgReviewDemo onExit={() => setDemo(false)} /> : <>
+    <View style={styles.stats}>
+      <Stat label="Elapsed time" value={timeLabel(current)} sub={`of ${timeLabel(durationSeconds)}`} />
+      <Stat label="Heart rate" value={sample ? `${heartRate} bpm` : '—'} sub={sample ? 'Illustrative sample' : 'Needs ECG samples'} />
+      <Stat label="Classification" value={sample ? 'NORMAL · N' : 'Unavailable'} sub={sample ? 'At the current time' : 'Model not connected'} tone={sample ? 'good' : 'muted'} />
     </View>
-    <View style={[styles.controls, styles.viewControls]}>
-      <Control label={`Zoom in ×${zoom}`} onPress={() => setZoom((value) => Math.min(4, value + 1))} disabled={!sample || zoom === 4}/>
-      <Control label="Zoom out" onPress={() => setZoom((value) => Math.max(1, value - 1))} disabled={!sample || zoom === 1}/>
-      <Text style={styles.controlLabel}>Window</Text><Picker enabled={sample} selectedValue={windowSize} onValueChange={(value) => setWindowSize(String(value))} style={styles.picker}>{['2.5','5','10'].map((value) => <Picker.Item key={value} value={value} label={`${value} s`}/>)}</Picker>
-      <View style={styles.eventNav}><Control label="Previous apnea" onPress={() => moveEvent(-1)} disabled={!sample || !study.events.length || current <= seconds(study.events[0].start)}/><Control label="Next apnea" onPress={() => moveEvent(1)} disabled={!sample || !study.events.length || current >= seconds(study.events[study.events.length - 1].start)}/></View>
-    </View>
+
     {sample ? <>
+      <GlassPanel style={styles.toolbar}>
+        <Group title="Playback">
+          <Control label={playbackActive ? '❚❚ Pause' : '▶ Play'} onPress={() => { if (playbackActive) setPlaying(false); else { if (current >= durationSeconds) setCurrent(0); setPlaying(true); } }} active={playbackActive}/>
+          <Picker selectedValue={speed} onValueChange={(value) => setSpeed(String(value))} style={styles.picker}>{['0.5','1','2'].map((value) => <Picker.Item key={value} value={value} label={`${value}× speed`}/>)}</Picker>
+        </Group>
+        <Group title="View">
+          <Picker selectedValue={signal} onValueChange={(value) => setSignal(String(value))} style={styles.picker}>{['Filtered','Raw'].map((value) => <Picker.Item key={value} value={value} label={value}/>)}</Picker>
+          <Picker selectedValue={windowSize} onValueChange={(value) => setWindowSize(String(value))} style={styles.picker}>{['2.5','5','10'].map((value) => <Picker.Item key={value} value={value} label={`${value} s window`}/>)}</Picker>
+          <View style={styles.zoom}>
+            <Control label="−" onPress={() => setZoom((value) => Math.max(1, value - 1))} disabled={zoom === 1} square/>
+            <Text style={styles.zoomValue}>×{zoom}</Text>
+            <Control label="+" onPress={() => setZoom((value) => Math.min(4, value + 1))} disabled={zoom === 4} square/>
+          </View>
+        </Group>
+        <Group title="Apnea events">
+          <Control label="◀ Previous" onPress={() => moveEvent(-1)} disabled={!study.events.length || current <= seconds(study.events[0].start)}/>
+          <Control label="Next ▶" onPress={() => moveEvent(1)} disabled={!study.events.length || current >= seconds(study.events[study.events.length - 1].start)}/>
+        </Group>
+      </GlassPanel>
+
       <GlassPanel style={styles.chartPanel}>
-        <View style={styles.chartHead}><Text style={styles.chartTitle}>{signal.toUpperCase()} ECG · red = apnea · cyan = R-peak</Text><Text style={styles.rr}>Previous R-R: {rrInterval} ms · Next R-R: {rrInterval} ms</Text></View>
-        <Pressable accessibilityRole="image" accessibilityLabel={`${signal} ECG waveform. Tap to seek within the current elapsed-time window.`} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} onPress={(event) => seekPlot(event.nativeEvent.locationX)} style={[styles.chartTouch,{height:wide?Math.min(580,width*0.33):350}]}>
+        <View style={styles.chartHead}><Text style={styles.chartTitle}>{signal} ECG</Text><Text style={styles.rr}>R-R {rrInterval} ms</Text></View>
+        <Pressable accessibilityRole="image" accessibilityLabel={`${signal} ECG waveform. Tap to seek within the current elapsed-time window.`} onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)} onPress={(event) => seekPlot(event.nativeEvent.locationX)} style={[styles.chartTouch,{height:wide?Math.min(520,width*0.3):320}]}>
           <Svg width="100%" height="100%" viewBox="0 0 1000 520" preserveAspectRatio="none">
             <Rect x="0" y="0" width="1000" height="520" fill="#061417"/>
             {Array.from({ length: 19 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * 20} y2={plot.top + index * 20} stroke={index % 4 === 0 ? '#28434a' : '#152c31'} strokeWidth={index % 4 === 0 ? 1.2 : 0.7}/>)}
@@ -100,14 +121,14 @@ export default function DetailScreen() {
             {peaks.map((peak, index) => <Circle key={index} cx={peak.x} cy={peak.y} r={Math.abs(peak.time-current) < rrInterval / 2000 ? 5.5 : 4} fill={Math.abs(peak.time-current) < rrInterval / 2000 ? '#FFD166' : 'transparent'} stroke={Math.abs(peak.time-current) < rrInterval / 2000 ? '#FFD166' : '#54E7E8'} strokeWidth={1.8}/>)}
             <Line x1={plot.left+(current-start)/visibleSeconds*(plot.right-plot.left)} x2={plot.left+(current-start)/visibleSeconds*(plot.right-plot.left)} y1={plot.top} y2={plot.bottom} stroke="#CAF0F8" strokeWidth={1.2}/>
             {Array.from({ length: 5 }, (_, index) => { const t = start + index * visibleSeconds / 4; const x = plot.left + index * (plot.right-plot.left) / 4; return <SvgText key={index} x={x} y={plot.bottom+23} fill="#CAF0F8" fontSize="13" textAnchor="middle">{timeLabel(t)}</SvgText>; })}
-            <SvgText x={plot.left} y={28} fill="#CAF0F8" fontSize="15">{signal.toUpperCase()} ECG · red = apnea</SvgText>
             <SvgText x={30} y={235} fill="#CAF0F8" fontSize="13" transform="rotate(-90 30 235)" textAnchor="middle">ECG (mV)</SvgText>
           </Svg>
         </Pressable>
-        <View style={styles.axisLegend}><Text style={styles.copy}>● Apnea interval</Text><Text style={styles.copy}>○ R-peak</Text><Text style={styles.copy}>● Selected peak</Text></View>
+        <View style={styles.legend}><Legend color={eventRed} text="Apnea interval"/><Legend color="#54E7E8" text="R-peak" hollow/><Legend color="#FFD166" text="Selected peak"/></View>
       </GlassPanel>
-      <GlassPanel style={styles.nightPanel}>
-        <View style={styles.chartHead}><Text style={styles.chartTitle}>FULL NIGHT · click to seek · red = apnea annotation</Text><Text style={styles.rr}>{timeLabel(current)}</Text></View>
+
+      <GlassPanel style={styles.chartPanel}>
+        <View style={styles.chartHead}><Text style={styles.chartTitle}>Full night</Text><Text style={styles.rr}>Tap to jump · {timeLabel(current)}</Text></View>
         <View onLayout={(event) => setTimelineWidth(event.nativeEvent.layout.width)} style={styles.timeline}>
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>{study.events.map((event) => <View key={event.id} style={[styles.nightEvent,{left:`${seconds(event.start)/durationSeconds*100}%`,width:`${Math.max(0.15,(seconds(event.end)-seconds(event.start))/durationSeconds*100)}%`}]}/>)}</View>
           <View pointerEvents="none" style={[styles.currentPosition,{left:`${current/durationSeconds*100}%`}]}/>
@@ -115,10 +136,47 @@ export default function DetailScreen() {
         </View>
         <View style={styles.nightAxis}><Text style={styles.axisText}>00:00:00</Text><Text style={styles.axisText}>{timeLabel(durationSeconds/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds*2/3)}</Text><Text style={styles.axisText}>{timeLabel(durationSeconds)}</Text></View>
       </GlassPanel>
-    </> : <GlassPanel style={styles.empty}><Text style={styles.chartTitle}>ECG samples are unavailable</Text><Text style={styles.copy}>This local preview reads recording headers only. It does not load ECG signal samples or generate apnea annotations.</Text></GlassPanel>}
-    <View style={styles.footer}><AppButton onPress={() => router.push('/summary')} style={styles.summaryButton}><Text style={styles.buttonText}>View summary</Text></AppButton></View>
+    </> : <GlassPanel style={styles.empty}>
+      <Text style={styles.emptyMark}>∿</Text>
+      <Text style={styles.chartTitle}>Analysis is not connected yet</Text>
+      <Text style={styles.emptyCopy}>The recording is stored securely. The ECG waveform, heart rate and apnea events will appear here once the analysis model is connected.</Text>
+      <AppButton variant="quiet" onPress={() => setDemo(true)}><Text style={styles.quietText}>Try the review tools with demo data</Text></AppButton>
+    </GlassPanel>}
+    </>}
+
+    <View style={styles.footer}>
+      <AppButton variant="quiet" onPress={() => router.push('/')} style={styles.footerButton}><Text style={styles.quietText}>Back to Home</Text></AppButton>
+      <AppButton onPress={() => router.push('/summary')} style={styles.footerButton}><Text style={styles.buttonText}>View summary</Text></AppButton>
+    </View>
   </ScrollView>;
 }
 
-function Control({ label, onPress, active = false, disabled = false }: { label: string; onPress: () => void; active?: boolean; disabled?: boolean }) { return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.control,active&&styles.controlActive,disabled&&styles.controlDisabled]}><Text style={[styles.controlText,active&&styles.controlTextActive]}>{label}</Text></Pressable>; }
-const styles=StyleSheet.create({scroll:{flex:1},page:{width:'100%',maxWidth:1500,alignSelf:'center',paddingHorizontal:20,paddingTop:12,paddingBottom:106,gap:10},pageWide:{paddingHorizontal:24},playerHeader:{minHeight:48,flexDirection:'row',flexWrap:'wrap',alignItems:'center',justifyContent:'space-between',gap:10},timeRow:{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:16},clock:{color:colors.text,fontSize:24,fontWeight:'800'},heartRate:{color:colors.text,fontSize:22,fontWeight:'700'},classification:{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:8,backgroundColor:'#BDEEE5'},classificationUnavailable:{backgroundColor:colors.panel},classificationText:{color:'#075B54',fontSize:14,fontWeight:'800'},controls:{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8},viewControls:{justifyContent:'space-between'},control:{minHeight:44,justifyContent:'center',paddingHorizontal:16,borderRadius:8,borderWidth:1,borderColor:colors.border,backgroundColor:colors.scrim},controlActive:{backgroundColor:'#087F83'},controlDisabled:{opacity:0.45},controlText:{color:colors.text,fontSize:14,fontWeight:'700'},controlTextActive:{color:'#FFFFFF'},controlLabel:{color:colors.text,fontSize:14},picker:{minHeight:44,minWidth:92,borderWidth:1,borderColor:colors.border,borderRadius:8,backgroundColor:colors.scrim,color:colors.text,fontSize:14,fontFamily:fonts.regular,paddingHorizontal:8},eventNav:{flexDirection:'row',gap:8},chartPanel:{gap:8,padding:12,borderRadius:8},chartHead:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',gap:8},chartTitle:{color:colors.text,fontSize:14,fontWeight:'700'},rr:{color:colors.muted,fontSize:14},chartTouch:{width:'100%',overflow:'hidden',backgroundColor:'#061417'},axisLegend:{flexDirection:'row',flexWrap:'wrap',gap:14},copy:{color:colors.text,fontSize:14,lineHeight:21},nightPanel:{gap:8,padding:14,borderRadius:8},timeline:{position:'relative',height:76,justifyContent:'center',backgroundColor:'#07171A',borderLeftWidth:1,borderColor:colors.border},nightEvent:{position:'absolute',top:0,bottom:0,backgroundColor:eventRed},currentPosition:{position:'absolute',top:0,bottom:0,width:2,backgroundColor:colors.text,zIndex:1},nightAxis:{flexDirection:'row',justifyContent:'space-between'},axisText:{color:colors.text,fontSize:14},empty:{minHeight:240,justifyContent:'center',gap:10},footer:{alignItems:'flex-start',paddingTop:4},summaryButton:{minHeight:52},buttonText:{color:colors.accentText,fontSize:16,fontWeight:'800'},gate:{flex:1,justifyContent:'center',alignItems:'flex-start',padding:24,gap:16},title:{color:colors.text,fontSize:24,fontWeight:'800'}});
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: 'good' | 'muted' }) {
+  return <GlassPanel style={styles.stat}><Text style={styles.statLabel}>{label}</Text><Text style={[styles.statValue, tone === 'good' && styles.statGood, tone === 'muted' && styles.statMuted]}>{value}</Text><Text style={styles.statSub}>{sub}</Text></GlassPanel>;
+}
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return <View style={styles.group}><Text style={styles.groupTitle}>{title}</Text><View style={styles.groupRow}>{children}</View></View>;
+}
+function Legend({ color, text, hollow = false }: { color: string; text: string; hollow?: boolean }) {
+  return <View style={styles.legendItem}><View style={[styles.legendDot, { borderColor: color, backgroundColor: hollow ? 'transparent' : color }]}/><Text style={styles.legendText}>{text}</Text></View>;
+}
+function Control({ label, onPress, active = false, disabled = false, square = false }: { label: string; onPress: () => void; active?: boolean; disabled?: boolean; square?: boolean }) { return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.control,square&&styles.controlSquare,active&&styles.controlActive,disabled&&styles.controlDisabled]}><Text style={[styles.controlText,active&&styles.controlTextActive]}>{label}</Text></Pressable>; }
+
+const styles=StyleSheet.create({
+  scroll:{flex:1},page:{width:'100%',maxWidth:1280,alignSelf:'center',paddingHorizontal:16,paddingTop:16,paddingBottom:106,gap:14},pageWide:{paddingHorizontal:24},
+  stats:{flexDirection:'row',flexWrap:'wrap',gap:12},
+  stat:{flex:1,minWidth:180,gap:4},statLabel:{color:colors.muted,fontSize:13,fontWeight:'700'},statValue:{color:colors.text,fontSize:24,lineHeight:30,fontWeight:'800'},statGood:{color:'#BDEEE5'},statMuted:{color:colors.muted},statSub:{color:colors.muted,fontSize:13},
+  toolbar:{flexDirection:'row',flexWrap:'wrap',alignItems:'flex-start',justifyContent:'space-between',gap:16},
+  group:{flexGrow:1,minWidth:200,gap:8},groupTitle:{color:colors.muted,fontSize:13,fontWeight:'700'},groupRow:{flexDirection:'row',flexWrap:'wrap',alignItems:'center',gap:8},
+  zoom:{flexDirection:'row',alignItems:'center',gap:6},zoomValue:{color:colors.text,fontSize:14,fontWeight:'800',minWidth:28,textAlign:'center'},
+  control:{minHeight:44,justifyContent:'center',alignItems:'center',paddingHorizontal:16,borderRadius:999,borderWidth:1,borderColor:colors.border,backgroundColor:colors.scrim},controlSquare:{width:44,paddingHorizontal:0},controlActive:{backgroundColor:colors.accent,borderColor:colors.accent},controlDisabled:{opacity:0.45},controlText:{color:colors.text,fontSize:14,fontWeight:'700'},controlTextActive:{color:colors.accentText},
+  picker:{minHeight:44,minWidth:120,borderWidth:1,borderColor:colors.border,borderRadius:999,backgroundColor:colors.scrim,color:colors.text,fontSize:14,fontFamily:fonts.regular,paddingHorizontal:12},
+  chartPanel:{gap:10},chartHead:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',alignItems:'center',gap:8},chartTitle:{color:colors.text,fontSize:16,fontWeight:'800'},rr:{color:colors.muted,fontSize:14},
+  chartTouch:{width:'100%',overflow:'hidden',borderRadius:14,backgroundColor:'#061417'},
+  legend:{flexDirection:'row',flexWrap:'wrap',gap:16},legendItem:{flexDirection:'row',alignItems:'center',gap:6},legendDot:{width:12,height:12,borderRadius:6,borderWidth:2},legendText:{color:colors.text,fontSize:13},
+  timeline:{position:'relative',height:64,overflow:'hidden',borderRadius:12,backgroundColor:'#07171A'},nightEvent:{position:'absolute',top:0,bottom:0,backgroundColor:eventRed},currentPosition:{position:'absolute',top:0,bottom:0,width:2,backgroundColor:colors.text,zIndex:1},nightAxis:{flexDirection:'row',justifyContent:'space-between'},axisText:{color:colors.muted,fontSize:13},
+  copy:{color:colors.text,fontSize:14,lineHeight:21},
+  empty:{minHeight:220,alignItems:'center',justifyContent:'center',gap:10,paddingVertical:28},emptyMark:{color:colors.accent,fontSize:36,fontWeight:'800'},emptyCopy:{color:colors.text,fontSize:14,lineHeight:21,textAlign:'center',maxWidth:520},
+  footer:{flexDirection:'row',flexWrap:'wrap',justifyContent:'flex-end',gap:10,paddingTop:4},footerButton:{minHeight:52,paddingHorizontal:22},buttonText:{color:colors.accentText,fontSize:16,fontWeight:'800'},quietText:{color:colors.text,fontSize:16,fontWeight:'700'},
+  gate:{flex:1,justifyContent:'center',alignItems:'flex-start',padding:24,gap:16},title:{color:colors.text,fontSize:24,fontWeight:'800'},
+});

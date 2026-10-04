@@ -75,8 +75,8 @@ function Workspace() {
           const label = active ? `${item.label}, current` : done ? `${item.label}, done` : upcoming ? `${item.label}, next required` : `${item.label}, upcoming`;
           return <Link key={item.href} href={blocked ? pathname as never : item.href} asChild>
             <Pressable accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: active, disabled: blocked }} disabled={blocked} style={StyleSheet.flatten([styles.navButton, active && styles.navActive])}>
-              {done && !active && item.href !== '/' ? <PosaText style={styles.doneMark}>✓</PosaText> : <NavIcon name={iconName} color={active ? colors.accentText : colors.text} />}
-              {item.href === '/' && done && !active ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
+              <NavIcon name={iconName} color={active ? colors.accentText : colors.text} />
+              {done && !active ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
               {active ? <PosaText style={styles.navLabel}>{item.label}</PosaText> : upcoming && !done ? <View style={styles.nextDot} /> : null}
             </Pressable>
           </Link>;
@@ -126,5 +126,5 @@ const styles = StyleSheet.create({
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
   navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
-  doneMark: { color: colors.accent, fontSize: 20, fontWeight: '800' }, homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
+  homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
 });

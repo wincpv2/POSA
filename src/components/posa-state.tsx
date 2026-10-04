@@ -8,11 +8,13 @@ export type Study = {
   apneaBurden: string; apneaMinutes: string; noEventMinutes: string; duration: string;
   status: 'empty' | 'uploaded' | 'processing' | 'failed' | 'ready'; progress: number;
   events: ApneaEvent[]; summaryMetrics: SummaryMetrics | null; reportStatus: 'Draft' | 'Reviewed' | 'Approved';
+  uploadId: string | null; // the ecg_uploads row in Supabase, when this study is a real upload
+  patientId: string | null; // that upload's patient, for the patient dashboard link
 };
 
 const times = [['00:42:00','00:47:00'],['00:49:00','01:29:00'],['01:40:00','01:56:00'],['03:03:00','03:25:00'],['03:53:00','04:01:00'],['04:12:00','04:18:00'],['04:26:00','04:33:00'],['04:41:00','04:46:00'],['04:55:00','05:02:00'],['05:10:00','05:14:00'],['05:22:00','05:29:00'],['05:36:00','05:42:00'],['05:51:00','05:56:00'],['06:04:00','06:10:00'],['06:18:00','06:23:00'],['06:31:00','06:36:00'],['06:42:00','06:47:00']];
 export const sampleEvents: ApneaEvent[] = times.map(([start, end], index) => ({ id: index + 1, start, end, sample: true }));
-const initial: Study = { fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', studyId: '', age: '', sex: '', bmi: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', status: 'empty', progress: 0, events: [], summaryMetrics: null, reportStatus: 'Draft' };
+const initial: Study = { fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', studyId: '', age: '', sex: '', bmi: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', status: 'empty', progress: 0, events: [], summaryMetrics: null, reportStatus: 'Draft', uploadId: null, patientId: null };
 type State = { study: Study; update: (next: Partial<Study>) => void; reset: () => void; start: () => void; cancel: () => void };
 const Context = createContext<State | null>(null);
 

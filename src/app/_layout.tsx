@@ -2,10 +2,11 @@ import '../global.css';
 
 import { Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold, Nunito_800ExtraBold } from '@expo-google-fonts/nunito';
 import { useFonts } from 'expo-font';
+import { Slot, usePathname } from 'expo-router';
 import { ActivityIndicator, View } from 'react-native';
 
-import LoginScreen from '@/components/login-screen';
 import PosaShell from '@/components/posa-shell';
+import RoleSelect from '@/components/role-select';
 import { colors, fonts } from '@/components/posa-theme';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 
@@ -15,8 +16,12 @@ function Spinner() {
 
 function Gate() {
   const { session, loading } = useAuth();
+  const pathname = usePathname();
+  // Patient links (dashboard /p/…, single study /shared/…) open for anyone,
+  // signed in or not.
+  if (pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
   if (loading) return <Spinner />;
-  return session ? <PosaShell /> : <LoginScreen />;
+  return session ? <PosaShell /> : <RoleSelect />;
 }
 
 export default function RootLayout() {

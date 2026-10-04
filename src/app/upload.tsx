@@ -60,10 +60,9 @@ export default function UploadScreen() {
         detectedLead = detected.lead;
       }
       setPicked(files);
-      setRawId('');
-      setRate(sampleRate ? String(sampleRate) : '');
-      setLead(detectedLead);
-      update({ fileName: files.map((file) => file.name).join(' + '), fileSize: files.reduce((total, file) => total + (file.size || 0), 0), format, sampleRate, lead: detectedLead, studyId: '', age: '', sex: '', bmi: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, reportStatus: 'Draft', progress: 0, metadata: header ? 'Header detected locally' : 'Image · select signal settings manually', status: 'uploaded' });
+      if (sampleRate) setRate(String(sampleRate));
+      if (detectedLead) setLead(detectedLead);
+      update({ fileName: files.map((file) => file.name).join(' + '), fileSize: files.reduce((total, file) => total + (file.size || 0), 0), format, sampleRate, lead: detectedLead, severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, reportStatus: 'Draft', progress: 0, metadata: header ? 'Header detected locally' : 'Image · select signal settings manually', status: 'uploaded', uploadId: null, patientId: null });
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not read the selected file. Try another file.'); }
     finally { setLoading(false); }
   };
@@ -93,7 +92,7 @@ export default function UploadScreen() {
       });
       // The signal/header file goes first: storage_path points at the first file.
       const ordered = [...picked].sort((a, b) => Number(/\.dat$/i.test(a.name)) - Number(/\.dat$/i.test(b.name)));
-      await uploadEcgStudy({
+      const uploaded = await uploadEcgStudy({
         patientId: patient.patientId,
         recordCode: id.value,
         files: ordered.map((file) => ({ uri: file.uri, name: file.name, mimeType: file.mimeType })),
@@ -101,7 +100,7 @@ export default function UploadScreen() {
         leadConfiguration: lead,
         samplingRateHz: Number(rate),
       });
-      update({ studyId: id.value, sampleRate: Number(rate) || null, lead, events: [], summaryMetrics: null });
+      update({ studyId: id.value, sampleRate: Number(rate) || null, lead, events: [], summaryMetrics: null, uploadId: uploaded.id, patientId: patient.patientId });
       start();
       router.push('/processing');
     } catch (reason) {
@@ -116,7 +115,7 @@ export default function UploadScreen() {
     <PageIntro eyebrow="NEW STUDY" title="Upload a study" description="Choose a local ECG record. Use a de-identified subject ID; do not enter a patient name." />
     <GlassPanel style={styles.section}><Text style={styles.heading}>Study file <Text style={styles.required}>Required</Text></Text><Text style={styles.copy}>Supported: EDF, WFDB (.hea + .dat), PNG, JPEG, TIFF. DICOM is not supported.</Text>
       <Pressable accessibilityRole="button" disabled={loading} onPress={pick} style={styles.drop}><Text style={styles.dropTitle}>{loading ? 'Reading file header…' : study.fileName ? 'Change selected files' : 'Choose study file'}</Text><Text style={styles.copy}>Headers are read on this device; files are uploaded to private storage when you start.</Text></Pressable>
-      {study.fileName ? <View style={styles.file}><View style={{ flex: 1 }}><Text style={styles.value}>{study.fileName}</Text><Text style={styles.copy}>{study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''} · {study.metadata}</Text></View><Pressable accessibilityRole="button" onPress={() => { update({ fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', studyId: '', age: '', sex: '', bmi: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, progress: 0, status: 'empty' }); setPicked([]); setRawId(''); setRate(''); setLead(''); }} style={styles.touch}><Text style={styles.link}>Remove</Text></Pressable></View> : null}
+      {study.fileName ? <View style={styles.file}><View style={{ flex: 1 }}><Text style={styles.value}>{study.fileName}</Text><Text style={styles.copy}>{study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''} · {study.metadata}</Text></View><Pressable accessibilityRole="button" onPress={() => { update({ fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, progress: 0, status: 'empty', uploadId: null, patientId: null }); setPicked([]); }} style={styles.touch}><Text style={styles.link}>Remove</Text></Pressable></View> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
     </GlassPanel>
     <GlassPanel style={styles.section}><FormLabel>De-identified study ID · required</FormLabel><TextInput value={rawId} onChangeText={selectId} placeholder="e.g. 8842WS" placeholderTextColor={colors.muted} autoCapitalize="characters" style={styles.input} accessibilityLabel="Enter four digits and a two-letter suffix"/><Text style={[styles.copy, !id.valid && styles.idHint]}>{id.preview}{!id.valid ? ' · enter 4 digits and 2 letters to continue' : ' · ready'}</Text>{rawId && !id.preview.startsWith('REC-') ? <Text accessibilityRole="alert" style={styles.error}>Use a four-digit number followed by two letters.</Text> : null}</GlassPanel>
