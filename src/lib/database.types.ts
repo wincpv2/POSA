@@ -209,6 +209,51 @@ export type Database = {
         }
         Relationships: []
       }
+      patient_share_links: {
+        Row: {
+          created_at: string
+          created_by: string
+          expires_at: string
+          id: string
+          patient_id: string
+          revoked_at: string | null
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          expires_at?: string
+          id?: string
+          patient_id: string
+          revoked_at?: string | null
+          token: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          expires_at?: string
+          id?: string
+          patient_id?: string
+          revoked_at?: string | null
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "patient_share_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "patient_share_links_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       patients: {
         Row: {
           bmi: number | null
@@ -254,12 +299,208 @@ export type Database = {
         }
         Relationships: []
       }
+      report_pdfs: {
+        Row: {
+          approved_at: string | null
+          approved_by_name: string | null
+          created_at: string
+          created_by: string
+          ecg_upload_id: string
+          id: string
+          storage_path: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by_name?: string | null
+          created_at?: string
+          created_by: string
+          ecg_upload_id: string
+          id?: string
+          storage_path: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by_name?: string | null
+          created_at?: string
+          created_by?: string
+          ecg_upload_id?: string
+          id?: string
+          storage_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "report_pdfs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "report_pdfs_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: false
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_reports: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          approved_by_name: string | null
+          clinician_opinion: string
+          ecg_upload_id: string
+          patient_explanation: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewed_by_name: string | null
+          status: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_by_name?: string | null
+          clinician_opinion?: string
+          ecg_upload_id: string
+          patient_explanation?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_by_name?: string | null
+          clinician_opinion?: string
+          ecg_upload_id?: string
+          patient_explanation?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_reports_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_reports_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: true
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_reports_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_reports_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      study_share_links: {
+        Row: {
+          created_at: string
+          created_by: string
+          ecg_upload_id: string
+          expires_at: string
+          id: string
+          revoked_at: string | null
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          ecg_upload_id: string
+          expires_at?: string
+          id?: string
+          revoked_at?: string | null
+          token: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          ecg_upload_id?: string
+          expires_at?: string
+          id?: string
+          revoked_at?: string | null
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "study_share_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "study_share_links_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: false
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      account_display_name: { Args: { p_user: string }; Returns: string }
+      get_deletion_log: {
+        Args: { p_limit?: number }
+        Returns: {
+          action: string
+          actor_is_me: boolean
+          actor_name: string
+          created_at: string
+          currently_deleted: boolean
+          ecg_upload_id: string
+          id: number
+          record_code: string
+          subject_code: string
+        }[]
+      }
+      get_patient_dashboard: { Args: { p_token: string }; Returns: Json }
+      get_shared_study: {
+        Args: { p_token: string }
+        Returns: {
+          created_at: string
+          expires_at: string
+          lead_configuration: string
+          record_code: string
+          sampling_rate_hz: number
+          status: string
+        }[]
+      }
+      hook_restrict_signup_domain: { Args: { event: Json }; Returns: Json }
+      restore_ecg_upload: { Args: { p_upload_id: string }; Returns: boolean }
+      soft_delete_ecg_upload: {
+        Args: { p_upload_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

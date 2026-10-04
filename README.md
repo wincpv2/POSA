@@ -1,7 +1,12 @@
 # POSA — Predictor of Obstructive Sleep Apnea
 
-แอป React Native (Expo) ที่เป็นเวิร์กสเตชันให้แพทย์/บุคลากรห้องแล็บนอนหลับ อัปโหลดสัญญาณ ECG
-ของผู้ป่วย รันโมเดลทำนายความเสี่ยง OSA (obstructive sleep apnea) แล้วดูผลตรวจได้
+แอป React Native (Expo) สำหรับแพทย์และบุคลากรห้องแล็บการนอนหลับ ใช้อัปโหลดสัญญาณ ECG ของผู้ป่วย
+ดูผลการตรวจ เขียนรายงานและลงนาม แล้วส่งผลให้ผู้ป่วยดูผ่าน QR code หรือลิงก์ได้
+
+> **สถานะ:** ส่วน backend, การ login และการอัปโหลดใช้งานกับ Supabase ได้จริงแล้ว ส่วนการวิเคราะห์ด้วยโมเดล ML
+> **ยังไม่ได้เชื่อมต่อ** ผลวิเคราะห์ที่เห็นในแอปตอนนี้เป็นข้อมูลตัวอย่าง (DEMO) ทั้งหมด
+
+ผู้ดูแลส่วน backend / database: Panut Anan ([@tonnow2005](https://github.com/tonnow2005), panuttonnow520@gmail.com)
 
 ## ทีม
 
@@ -10,15 +15,44 @@
 | UI/UX Designer | Pisit Pipathanabenjakul |
 | Researcher | Papangkorn Bennarong |
 | ML Engineer | Worraprach Srirattananon |
-| Mobile App Developer (ต่อ frontend↔backend, storage/database) | Panut Anan |
+| Mobile App Developer (เชื่อม frontend↔backend, storage/database) | Panut Anan |
 
 ## Tech stack
 
-- **แอป**: Expo / React Native, ระบบ routing แบบ file-based ของ `expo-router`
-- **Backend**: [Supabase](https://supabase.com) — Postgres, Auth, Storage, Row Level Security
-- **Auth**: Google OAuth ผ่าน Supabase Auth
-- **ML**: CatBoost / XGBoost / CNN ensemble บน feature ที่แปลงมาจาก ECG (RRI, EDR, CPC,
-  STFT/CWT) เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
+- **แอป:** Expo SDK 57 / React Native และ routing แบบ file-based ของ `expo-router`
+- **Backend:** [Supabase](https://supabase.com) ได้แก่ Postgres, Auth, Storage และ Row Level Security (RLS)
+- **Login:** Google OAuth ผ่าน Supabase Auth
+- **PDF:** `expo-print` บนมือถือ และ `html2pdf.js` บนเว็บ
+- **QR:** `expo-camera` สำหรับสแกน และ `react-native-qrcode-svg` สำหรับสร้าง
+- **ML (กำลังทำ):** CatBoost / XGBoost / CNN ensemble บน feature จาก ECG (RRI, EDR, CPC, STFT/CWT)
+  เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
+
+## ฟีเจอร์
+
+### ฝั่งแพทย์ (ต้อง login ด้วย Google)
+- **หน้าแรกเลือกบทบาท:** "I'm a clinician" หรือ "I'm a patient"
+- **Home:** รายการการตรวจจริงจาก Supabase ค้นหาและกรองได้ และ**ลบแบบ soft delete** พร้อมปุ่ม Undo
+  (เฉพาะการตรวจที่ตัวเองอัปโหลด)
+- **Upload:** อัปโหลดไฟล์ EDF, WFDB (`.hea` + `.dat`) หรือรูปภาพ ขึ้น Storage แบบ private
+  อ่าน sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม
+- **Detail:** หน้าดูสัญญาณ ECG (เล่น, ซูม, เลือกช่วงเวลา, เลื่อนไป apnea event ก่อนหน้า/ถัดไป)
+  ตอนนี้แสดงกราฟได้เฉพาะรายการตัวอย่าง (SAMPLE) ส่วนการตรวจจริงจะแสดงเมื่อเชื่อมต่อ API ของ ML แล้ว
+- **Summary / Report:**
+  - แพทย์เขียน **Clinician opinion** และ **Patient explanation** เอง แล้วบันทึกลงฐานข้อมูล
+  - สถานะ Draft → Reviewed → Approved และย้อนกลับได้
+  - **ลงนามอัตโนมัติ** ด้วยชื่อจากบัญชีที่ login พร้อมวันเวลา รายงานที่ Approved แล้วจะถูกล็อกไม่ให้แก้
+  - **Export PDF / Print** ฉบับที่ยังไม่ Approved จะมีลายน้ำ DRAFT / REVIEWED
+  - **ฉบับ Approved เก็บเป็น PDF ใน Supabase อัตโนมัติ** มีหลายเวอร์ชันได้ และดาวน์โหลดย้อนหลังได้
+- **ลิงก์ Dashboard ผู้ป่วย:** สร้าง QR code และลิงก์ให้ผู้ป่วย อายุ 90 วัน
+- **Deletion log:** ดูว่าใครลบหรือกู้คืนการตรวจไหน เมื่อไหร่ ของผู้ป่วยทุกคนที่ตัวเองผูกอยู่ รวมถึงที่หมอคนอื่นทำ
+  (มีกล่องสรุปในหน้า Home และหน้าเต็มที่ `/activity`) แก้หรือลบ log ไม่ได้
+- **เมนูบัญชี:** มุมขวาบน มีชื่อ, Deletion log และปุ่ม Sign out
+
+### ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
+- **Scan QR** (ค่าเริ่มต้น) หรือ **Paste link** เพื่อเปิด Dashboard ของตัวเอง
+- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง และเห็น **ข้อความจากแพทย์**
+  (Patient explanation) เฉพาะคืนที่แพทย์ Approve รายงานแล้ว
+- ไม่แสดงชื่อ รหัสผู้ป่วย หรือความเห็นของแพทย์ (Clinician opinion) ให้ผู้ป่วยเห็น
 
 ## เริ่มต้นใช้งาน
 
@@ -31,7 +65,7 @@ npm install
 ### 2. ตั้งค่า environment variables
 
 คัดลอก `.env.example` เป็น `.env` แล้วกรอกค่าจริงจาก Supabase dashboard
-(**Project Settings → Data API** สำหรับ URL, **Project Settings → API Keys** สำหรับ key):
+(**Project Settings → Data API** สำหรับ URL และ **Project Settings → API Keys** สำหรับ key)
 
 ```bash
 cp .env.example .env
@@ -40,63 +74,113 @@ cp .env.example .env
 ```
 EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon/publishable key>
+# ไม่บังคับ: แสดงเฉพาะบัญชีขององค์กรนี้ในหน้าเลือกบัญชี Google
+EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN=
 ```
 
-**ห้ามใช้ `service_role` key ตรงนี้เด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ
-Row Level Security เท่านั้น — `service_role` เป็น key ที่ bypass RLS ทั้งหมด ห้ามอยู่ใน
-โค้ดฝั่ง client เด็ดขาด **ห้าม commit ไฟล์ `.env`** เข้า git (ถูก ignore ไว้แล้ว) —
-มีแค่ `.env.example` เท่านั้นที่ควร commit
+> **ห้ามใช้ `service_role` key ในแอปเด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ RLS
+> และ**ห้าม commit `.env`** เข้า git (ไฟล์นี้ถูก ignore ไว้แล้ว) ให้ commit แค่ `.env.example`
 
-### 3. รันแอป
+### 3. ตั้งค่า Supabase Auth
+
+- **Authentication → Providers → Google:** ใส่ Client ID / Secret จาก Google Cloud Console
+- **Authentication → URL Configuration → Redirect URLs:** เพิ่ม `posaapp://auth/callback`
+  (สำหรับมือถือ) และ `http://localhost:8081/**` (สำหรับเว็บตอนพัฒนา)
+
+### 4. รันแอป
 
 ```bash
-npx expo start
+npx expo start        # เลือก w เพื่อเปิดบนเว็บ
+npx expo start --web  # หรือเปิดบนเว็บเลย
 ```
 
-## ตั้งค่า Backend (Supabase)
+ตรวจโค้ดก่อน commit ทุกครั้ง:
 
-Migration ทั้งหมดอยู่ที่ `supabase/migrations/` ใช้
-[Supabase CLI](https://supabase.com/docs/guides/cli) รันได้เลยผ่าน `npx supabase`
-โดยไม่ต้องติดตั้งแยก:
+```bash
+npx tsc --noEmit
+npx expo lint
+```
+
+## Backend (Supabase)
+
+Migration ทั้งหมดอยู่ใน `supabase/migrations/` (18 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
 
 ```bash
 npx supabase login
 npx supabase link --project-ref <your-project-ref>
 npx supabase db push
-```
-
-Generate TypeScript types จาก schema จริงทุกครั้งที่มีการแก้ migration:
-
-```bash
 npx supabase gen types typescript --linked > src/lib/database.types.ts
 ```
 
-### ภาพรวม Schema
+### ตาราง
 
-- `profiles` — บัญชีของแพทย์ (1:1 กับ `auth.users`) มี `consent_accepted` เก็บว่ายินยอมให้เก็บข้อมูลสุขภาพหรือยัง
-- `patients` — ตัวตนผู้ป่วยแบบใช้ร่วมกัน (sex, date of birth, BMI) — ไม่ได้เป็นของแพทย์คนใดคนหนึ่ง
-- `clinician_patients` — ตารางเชื่อม 1 แถวต่อความสัมพันธ์แพทย์↔ผู้ป่วย 1 คู่
-  (subject code, notes) — นี่คือจุดที่ทำให้แพทย์หลายคนแชร์ประวัติผู้ป่วยคนเดียวกันได้ —
-  แพทย์คนไหนก็ตามที่ผูกอยู่กับผู้ป่วยคนนั้น จะเห็นทุกการตรวจของผู้ป่วยคนนั้น ไม่ใช่แค่ที่ตัวเองอัปโหลด
-- `ecg_uploads` — 1 แถวต่อการตรวจ ECG 1 ครั้ง ไฟล์เก็บใน Storage bucket แบบ private ชื่อ `ecg-files`
-- `models` — ทะเบียนโมเดล ML (แพทย์อ่านได้อย่างเดียว เขียนได้แค่ผ่าน service-role)
-- `predictions`, `prediction_minutes`, `sleep_sessions` — **ยังไม่ได้สร้าง** รอ output
-  contract จากทีม ML (รูปแบบ label, มี confidence score ไหม, หน่วยเวลาที่ใช้)
-- `audit_log` — บันทึกประวัติการใช้งาน เข้าถึงได้แค่ผ่าน service-role
+| ตาราง | เก็บอะไร |
+|---|---|
+| `profiles` | บัญชีแพทย์ (1:1 กับ `auth.users`) มีชื่อสำหรับลงนาม และ `consent_accepted` |
+| `patients` | ตัวตนผู้ป่วยแบบใช้ร่วมกัน (เพศ, BMI) ไม่มีชื่อจริง |
+| `clinician_patients` | ความสัมพันธ์แพทย์↔ผู้ป่วย และรหัสผู้ป่วยที่แพทย์แต่ละคนตั้งเอง แพทย์ที่ผูกกับผู้ป่วยคนเดียวกันจะเห็นการตรวจของกันและกัน |
+| `ecg_uploads` | 1 แถวต่อการตรวจ 1 ครั้ง มีไฟล์ใน bucket `ecg-files`, Hz, lead, อายุ (`age_years`) และ soft delete ด้วย `deleted_at` |
+| `study_reports` | รายงานที่แพทย์เขียน (opinion, patient explanation), สถานะ และผู้ลงนามกับเวลา |
+| `report_pdfs` | PDF ฉบับ Approved ที่เก็บใน bucket `report-pdfs` |
+| `study_share_links` | ลิงก์ผลตรวจรายครั้ง (อายุ 30 วัน) |
+| `patient_share_links` | ลิงก์ Dashboard ผู้ป่วย (อายุ 90 วัน) |
+| `models` | ทะเบียนโมเดล ML (อ่านได้อย่างเดียว) |
+| `audit_log` | ประวัติการลบและกู้คืน เขียนได้ผ่านฟังก์ชันฝั่ง server เท่านั้น |
 
-ทุกตารางเปิด Row Level Security ตารางที่เป็นข้อมูลทางคลินิก/ประวัติ (`patients`, `ecg_uploads`)
-ใช้ soft delete (`deleted_at`) แทนการลบจริง เพื่อรักษา audit trail
+**ยังไม่ได้สร้าง:** `predictions`, `prediction_minutes`, `sleep_sessions` เพราะรอ ML output contract
 
-## หมายเหตุด้านความปลอดภัย
+### ฟังก์ชันในฐานข้อมูล
 
-- RLS คือด่านความปลอดภัยตัวจริง — การกรองข้อมูลฝั่ง client เป็นแค่ความสะดวก ไม่ใช่การป้องกัน
-- `service_role` key ไม่อยู่ในแอปเด็ดขาด ใช้แค่ anon/publishable key เท่านั้น
-- ความลับ (service_role key, OAuth client secret, ข้อมูลผู้ป่วยจริง) ห้ามหลุดเข้า git
-  ถ้าไม่แน่ใจ เช็คด้วย: `git log --all --full-history -- .env` ต้องได้ผลว่างเปล่า
-- แอปต้องโชว์ข้อความ responsible-AI disclaimer และขอ consent แยกต่างหากจากการ login
-  ก่อนจะเก็บข้อมูลสุขภาพใดๆ (ดู `src/components/login-screen.tsx`)
+| ฟังก์ชัน | หน้าที่ |
+|---|---|
+| `handle_new_user` (trigger) | สร้าง profile พร้อมชื่อจาก Google ตอนสมัคร |
+| `account_display_name` | ชื่อบัญชีสำหรับลงนาม (display name → ชื่อ Google → อีเมล) |
+| `study_reports_sign_off` (trigger) | บังคับลำดับสถานะ, ลงชื่อและเวลา, ล็อกรายงานที่ Approved |
+| `soft_delete_ecg_upload` / `restore_ecg_upload` | ลบหรือกู้คืนการตรวจ (เฉพาะคนที่อัปโหลด) และบันทึกลง `audit_log` |
+| `get_shared_study` | ข้อมูลผลตรวจรายครั้งสำหรับผู้ป่วยที่ไม่ได้ login |
+| `get_deletion_log` | อ่าน log การลบและกู้คืน เฉพาะผู้ป่วยที่หมอคนนั้นผูกอยู่ |
+| `get_patient_dashboard` | ข้อมูล Dashboard ผู้ป่วย (คืนเป็น JSON เพื่อเพิ่มพารามิเตอร์ได้ภายหลัง) |
+| `hook_restrict_signup_domain` | Auth hook จำกัดการสมัครเฉพาะ `@email.kmutnb.ac.th` **(สร้างไว้แล้วแต่ยังปิดอยู่)** |
 
-## สถานะโปรเจกต์
+**เปิดใช้การจำกัดโดเมน:** Dashboard → Authentication → Hooks → Before User Created → เลือก
+`hook_restrict_signup_domain` และใส่ `EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN=email.kmutnb.ac.th` ใน `.env`
 
-ดูสรุปสำหรับที่ประชุมทีมสำหรับความคืบหน้าปัจจุบัน สิ่งที่เหลือ และประเด็นที่ยังต้องตัดสินใจ
-(การให้ผู้ป่วย login ดูผลตรวจแบบ read-only, การจับคู่ผู้ป่วยข้ามแพทย์, และ UI เลือกผู้ป่วยในหน้า Upload)
+## โครงสร้างไฟล์หลัก
+
+```
+src/
+  app/                 หน้าจอ (expo-router)
+    _layout.tsx        ตัวกั้น login + เลือกบทบาท
+    index.tsx          Home (รายการการตรวจ, ลบ/Undo)
+    upload.tsx         อัปโหลดการตรวจ
+    detail.tsx         ดูสัญญาณ ECG
+    summary.tsx        รายงาน, ลงนาม, PDF
+    activity.tsx       Deletion log
+    p/[token].tsx      Dashboard ผู้ป่วย (ลิงก์)
+    shared/[token].tsx ผลตรวจรายครั้ง (ลิงก์)
+  components/          UI และหน้าจอฝั่งผู้ป่วย, report-export (PDF)
+  lib/
+    supabase.ts        Supabase client (ใช้แค่ publishable key)
+    auth-context.tsx   Google login, session, สร้าง profile
+    queries.ts         ฟังก์ชันอ่าน/เขียนข้อมูลทั้งหมด
+supabase/migrations/   schema, RLS และฟังก์ชันทั้งหมด
+```
+
+## ความปลอดภัย
+
+- **RLS คือด่านป้องกันตัวจริง** การกรองข้อมูลฝั่งแอปเป็นแค่ความสะดวก ไม่ใช่การป้องกัน
+- **ผู้ป่วยไม่มีบัญชี** ลิงก์และ QR ใช้ token สุ่มยาว 64 ตัวอักษร (256 bit) มีวันหมดอายุ
+  และข้อมูลส่งผ่านฟังก์ชันที่คัดเฉพาะข้อมูลที่ปลอดภัย ไม่มีรหัสผู้ป่วยหรือความเห็นของแพทย์
+- **ลบแบบ soft delete** ข้อมูลและไฟล์ไม่ถูกลบจริง และทุกการลบหรือกู้คืนถูกบันทึกลง `audit_log`
+- **ผู้ลงนามปลอมไม่ได้** ชื่อและเวลาลงนามมาจากบัญชีที่ login ผ่าน trigger ในฐานข้อมูล
+- ความลับ (service_role key, OAuth secret, ข้อมูลผู้ป่วยจริง) ห้ามเข้า git
+  ตรวจได้ด้วย `git log --all --full-history -- .env` ซึ่งต้องได้ผลว่าง
+- ระบบเป็น**เครื่องมือเพื่อการศึกษาด้านวิศวกรรมชีวการแพทย์** ไม่ใช่เครื่องมือวินิจฉัย
+  (แสดง disclaimer ในหน้า Login, หน้าผู้ป่วย และใน PDF)
+
+## สิ่งที่ยังไม่ได้ทำ
+
+- เชื่อมต่อโมเดล ML (ต้องตกลง output contract กับทีม ML ก่อน: label และ probability รายนาที, R-peaks, beat labels)
+- พารามิเตอร์ใน Dashboard ผู้ป่วย (รอตกลงกับทีม)
+- Tier 3: ปุ่มขอลบบัญชีหรือข้อมูล, Privacy Policy, บัญชีสำหรับ reviewer
+- ทดสอบบนมือถือจริง (ตอนนี้ทดสอบบนเว็บเป็นหลัก)

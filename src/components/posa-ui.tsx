@@ -100,7 +100,7 @@ export const ui = StyleSheet.create({
   disclosureTitle: { color: colors.cyan, fontSize: 14, fontWeight: '700' },
   disclosureMark: { color: colors.cyan, fontSize: 16, fontWeight: '600' },
   disclosureContent: { gap: 16, paddingTop: 12 },
-  button: { minHeight: 48, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, alignSelf: 'flex-start' },
+  button: { minHeight: 48, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, alignSelf: 'flex-start', cursor: 'pointer', userSelect: 'none' } as never,
   buttonCompact: { minHeight: 44, paddingVertical: 8, paddingHorizontal: 14 },
   buttonDisabled: { opacity: 0.45 },
   buttonPressed: { opacity: 0.8 },
@@ -110,3 +110,13 @@ export const ui = StyleSheet.create({
   glassPanel: { position: 'relative', overflow: 'hidden', borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.glassBase, padding: 16 },
   frostTint: { ...StyleSheet.absoluteFill, backgroundColor: colors.panel, borderRadius: 22 },
 });
+
+// Horizontal tap position inside the pressed element. On web, locationX is
+// sometimes missing (depends on which child got the event); offsetX is the
+// browser's equivalent. Returns null when neither is a usable number.
+export function pressX(event: { nativeEvent: { locationX?: number; offsetX?: number } }): number | null {
+  const { locationX, offsetX } = event.nativeEvent;
+  if (typeof locationX === 'number' && Number.isFinite(locationX)) return locationX;
+  if (typeof offsetX === 'number' && Number.isFinite(offsetX)) return offsetX;
+  return null;
+}

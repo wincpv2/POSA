@@ -10,7 +10,7 @@ import { colors, fonts } from './posa-theme';
 // posa.md "Security & medical-app compliance". Required on the login screen.
 const DISCLAIMER = 'แอปพลิเคชันนี้ใช้สำหรับการศึกษาทางวิศวกรรมชีวการแพทย์เท่านั้น';
 
-export default function LoginScreen() {
+export default function LoginScreen({ onBack }: { onBack?: () => void } = {}) {
   const { signInWithGoogle } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +30,11 @@ export default function LoginScreen() {
   return (
     <View style={styles.root}>
       <LinearGradient pointerEvents="none" colors={[colors.background, colors.gradientEnd]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
+      {onBack ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={onBack} style={styles.back}>
+          <Text style={styles.backText}>← Back</Text>
+        </Pressable>
+      ) : null}
       <View style={styles.brandMark}>
         <Text style={styles.brandGlyph}>∿</Text>
       </View>
@@ -63,6 +68,8 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontFamily: fonts.semibold, fontSize: 14, marginBottom: 12 },
   button: { backgroundColor: colors.accent, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 999, minWidth: 240, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   buttonPressed: { opacity: 0.85 },
+  back: { position: 'absolute', top: 16, left: 16, minHeight: 44, minWidth: 72, justifyContent: 'center' },
+  backText: { color: colors.text, fontFamily: fonts.bold, fontSize: 14 },
   buttonText: { color: colors.accentText, fontFamily: fonts.extraBold, fontSize: 15 },
   error: { color: colors.accentText, backgroundColor: colors.coral, padding: 8, borderRadius: 8, overflow: 'hidden', fontFamily: fonts.regular, fontSize: 13, textAlign: 'center', maxWidth: 320 },
   disclaimer: { color: colors.muted, fontFamily: fonts.regular, fontSize: 12, textAlign: 'center', maxWidth: 320, marginTop: 20 },
