@@ -9,14 +9,13 @@ import { useUploadState } from '@/components/posa-state';
 import { formatDeidentifiedStudyId, parseRecordHeader } from '@/components/record-metadata';
 import { colors, fonts } from '@/components/posa-theme';
 import { findOrCreatePatient, uploadEcgStudy } from '@/lib/queries';
+import { startStudyAnalysis } from '@/lib/inference';
 
-const rates = [100, 125, 200, 250, 300, 500, 1000];
-const leads = ['Lead I', 'Lead II', 'Lead III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'MLII'];
 const sexes = ['Female', 'Male', 'Other', 'Unknown'];
 // Browsers don't know a MIME type for .hea/.dat, so on web filter by extension instead.
 const pickerTypes = Platform.OS === 'web'
-  ? ['.edf', '.hea', '.dat', '.png', '.jpg', '.jpeg', '.tif', '.tiff']
-  : ['application/edf', 'application/octet-stream', 'image/*'];
+  ? ['.hea', '.dat']
+  : ['application/octet-stream'];
 // expo-file-system is not supported on web; there the picker gives us a browser File.
 async function readHead(asset: DocumentPicker.DocumentPickerAsset) {
   const size = 128 * 1024;
@@ -32,11 +31,7 @@ export default function UploadScreen() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [picked, setPicked] = useState<DocumentPicker.DocumentPickerAsset[]>([]);
-  const [rate, setRate] = useState(study.sampleRate ? String(study.sampleRate) : '');
-  const [lead, setLead] = useState(study.lead);
   const id = formatDeidentifiedStudyId(rawId);
-  const rateOptions = [...new Set([...(study.sampleRate ? [study.sampleRate] : []), ...rates])].sort((a, b) => a - b);
-  const leadOptions = [...new Set([...(study.lead ? [study.lead] : []), ...leads])];
 
   const pick = async () => {
     setError('');
@@ -45,24 +40,15 @@ export default function UploadScreen() {
       const result = await DocumentPicker.getDocumentAsync({ type: pickerTypes, multiple: true, copyToCacheDirectory: true });
       if (result.canceled) return;
       const files = result.assets;
-      const header = files.find((file) => /\.(edf|hea)$/i.test(file.name));
-      const image = files.find((file) => /\.(png|jpe?g|tiff?)$/i.test(file.name));
-      if (!header && !image) throw new Error('Unsupported format. Select an EDF, WFDB .hea/.dat pair, PNG, JPEG or TIFF. DICOM is not supported.');
-      let format: 'edf' | 'wfdb' | 'image' = 'image';
-      let sampleRate: number | null = null;
-      let detectedLead = '';
-      if (header) {
-        const isHea = /\.hea$/i.test(header.name);
-        if (isHea && !files.some((file) => file.name.toLowerCase() === `${header.name.replace(/\.hea$/i, '').toLowerCase()}.dat`)) throw new Error('Select the matching WFDB .dat signal file with the .hea header.');
-        const detected = parseRecordHeader(header.name, await readHead(header));
-        format = detected.format;
-        sampleRate = detected.sampleRate;
-        detectedLead = detected.lead;
-      }
+      const headers = files.filter((file) => /\.hea$/i.test(file.name));
+      if (headers.length !== 1 || files.length !== 2) throw new Error('Select exactly one WFDB .hea header and its matching .dat signal file.');
+      const header = headers[0];
+      const dat = files.find((file) => /\.dat$/i.test(file.name));
+      if (!dat || dat.name.replace(/\.dat$/i, '').toLowerCase() !== header.name.replace(/\.hea$/i, '').toLowerCase()) throw new Error('The .hea header and .dat signal file must have the same record name.');
+      const detected = parseRecordHeader(header.name, await readHead(header));
+      if (detected.format !== 'wfdb' || detected.sampleRate !== 100) throw new Error('This model accepts WFDB ECG recordings sampled at exactly 100 Hz.');
       setPicked(files);
-      if (sampleRate) setRate(String(sampleRate));
-      if (detectedLead) setLead(detectedLead);
-      update({ fileName: files.map((file) => file.name).join(' + '), fileSize: files.reduce((total, file) => total + (file.size || 0), 0), format, sampleRate, lead: detectedLead, severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, reportStatus: 'Draft', progress: 0, metadata: header ? 'Header detected locally' : 'Image · select signal settings manually', status: 'uploaded', uploadId: null, patientId: null });
+      update({ fileName: files.map((file) => file.name).join(' + '), fileSize: files.reduce((total, file) => total + (file.size || 0), 0), format: 'wfdb', sampleRate: 100, lead: detected.lead, reportStatus: 'Draft', progress: 0, metadata: 'WFDB header validated', status: 'uploaded', uploadId: null, patientId: null, runId: null, errorMessage: '' });
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not read the selected file. Try another file.'); }
     finally { setLoading(false); }
   };
@@ -71,9 +57,7 @@ export default function UploadScreen() {
     const formatted = formatDeidentifiedStudyId(value);
     update({ studyId: formatted.value });
   };
-  const selectRate = (value: string | number | null) => setRate(String(value ?? ''));
-  const selectLead = (value: string | number | null) => setLead(String(value ?? ''));
-  const ready = Boolean(study.fileName && id.valid && Number(rate) > 0 && lead && (study.format === 'image' || study.sampleRate));
+  const ready = Boolean(study.fileName && id.valid && study.format === 'wfdb' && study.sampleRate === 100);
   const begin = async () => {
     const ageNumber = Number(study.age);
     const ageGiven = study.age.trim() !== '';
@@ -97,11 +81,18 @@ export default function UploadScreen() {
         recordCode: id.value,
         files: ordered.map((file) => ({ uri: file.uri, name: file.name, mimeType: file.mimeType })),
         ageYears: ageGiven ? ageNumber : undefined,
-        leadConfiguration: lead,
-        samplingRateHz: Number(rate),
+        leadConfiguration: study.lead,
+        samplingRateHz: 100,
       });
-      update({ studyId: id.value, sampleRate: Number(rate) || null, lead, events: [], summaryMetrics: null, uploadId: uploaded.id, patientId: patient.patientId });
+      update({ studyId: id.value, sampleRate: 100, uploadId: uploaded.id, patientId: patient.patientId, status: 'queued', progress: 0 });
       start();
+      try {
+        const run = await startStudyAnalysis(uploaded.id);
+        update({ status: run.status === 'completed' ? 'ready' : 'processing', runId: run.runId });
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : 'Inference server is unavailable.';
+        update({ status: 'failed', errorMessage: message });
+      }
       router.push('/processing');
     } catch (reason) {
       // Supabase errors are plain objects with a message, not Error instances.
@@ -113,15 +104,15 @@ export default function UploadScreen() {
 
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <PageIntro eyebrow="NEW STUDY" title="Upload a study" description="Choose a local ECG record. Use a de-identified subject ID; do not enter a patient name." />
-    <GlassPanel style={styles.section}><Text style={styles.heading}>Study file <Text style={styles.required}>Required</Text></Text><Text style={styles.copy}>Supported: EDF, WFDB (.hea + .dat), PNG, JPEG, TIFF. DICOM is not supported.</Text>
+    <GlassPanel style={styles.section}><Text style={styles.heading}>Study file <Text style={styles.required}>Required</Text></Text><Text style={styles.copy}>Supported: one WFDB .hea header and its matching .dat file, sampled at 100 Hz.</Text>
       <Pressable accessibilityRole="button" disabled={loading} onPress={pick} style={styles.drop}><Text style={styles.dropTitle}>{loading ? 'Reading file header…' : study.fileName ? 'Change selected files' : 'Choose study file'}</Text><Text style={styles.copy}>Headers are read on this device; files are uploaded to private storage when you start.</Text></Pressable>
-      {study.fileName ? <View style={styles.file}><View style={{ flex: 1 }}><Text style={styles.value}>{study.fileName}</Text><Text style={styles.copy}>{study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''} · {study.metadata}</Text></View><Pressable accessibilityRole="button" onPress={() => { update({ fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', severity: '', apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '', events: [], summaryMetrics: null, progress: 0, status: 'empty', uploadId: null, patientId: null }); setPicked([]); }} style={styles.touch}><Text style={styles.link}>Remove</Text></Pressable></View> : null}
+      {study.fileName ? <View style={styles.file}><View style={{ flex: 1 }}><Text style={styles.value}>{study.fileName}</Text><Text style={styles.copy}>{study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''} · {study.metadata}</Text></View><Pressable accessibilityRole="button" onPress={() => { update({ fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '', studyId: '', durationSeconds: 0, progress: 0, status: 'empty', uploadId: null, patientId: null, runId: null, errorMessage: '' }); setPicked([]); }} style={styles.touch}><Text style={styles.link}>Remove</Text></Pressable></View> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
     </GlassPanel>
     <GlassPanel style={styles.section}><FormLabel>De-identified study ID · required</FormLabel><TextInput value={rawId} onChangeText={selectId} placeholder="e.g. 8842WS" placeholderTextColor={colors.muted} autoCapitalize="characters" style={styles.input} accessibilityLabel="Enter four digits and a two-letter suffix"/><Text style={[styles.copy, !id.valid && styles.idHint]}>{id.preview}{!id.valid ? ' · enter 4 digits and 2 letters to continue' : ' · ready'}</Text>{rawId && !id.preview.startsWith('REC-') ? <Text accessibilityRole="alert" style={styles.error}>Use a four-digit number followed by two letters.</Text> : null}</GlassPanel>
     <GlassPanel style={styles.section}><Text style={styles.heading}>Patient context · optional</Text><View style={styles.fields}><Field label="Age" value={study.age} onChange={(age) => update({ age })} placeholder="Years"/><View style={styles.field}><FormLabel>Sex</FormLabel><Picker selectedValue={study.sex} onValueChange={(value) => update({ sex: String(value ?? '') })} style={styles.picker}><Picker.Item label="Select sex" value=""/>{sexes.map((value) => <Picker.Item key={value} label={value} value={value}/>)}</Picker></View><Field label="BMI" value={study.bmi} onChange={(bmi) => update({ bmi })} placeholder="kg/m²" numeric/></View></GlassPanel>
-    <GlassPanel style={styles.section}><Text style={styles.heading}>Signal settings</Text><Text style={styles.copy}>{study.sampleRate ? `Detected from header: ${study.sampleRate} Hz · ${study.lead || 'ECG'} · choose another value only if verified.` : 'Images have no readable signal header. Select signal settings manually.'}</Text><View style={styles.fields}><View style={styles.field}><FormLabel>Sampling rate (Hz) · required</FormLabel><Picker selectedValue={rate} onValueChange={selectRate} style={styles.picker}><Picker.Item label="Choose sampling rate" value=""/>{rateOptions.map((value) => <Picker.Item key={value} label={`${value} Hz${value === study.sampleRate ? ' · detected' : ''}`} value={String(value)}/>)}</Picker></View><View style={styles.field}><FormLabel>Lead · required</FormLabel><Picker selectedValue={lead} onValueChange={selectLead} style={styles.picker}><Picker.Item label="Choose lead" value=""/>{leadOptions.map((value) => <Picker.Item key={value} label={`${value}${value === study.lead ? ' · detected' : ''}`} value={value}/>)}</Picker></View></View></GlassPanel>
-    <View style={styles.footer}><AppButton onPress={begin} disabled={!ready || loading || saving} style={styles.cta}><Text style={styles.primaryText}>{saving ? 'Uploading…' : 'Start analysis'}</Text></AppButton>{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}<Text style={styles.copy}>{ready ? 'Files are uploaded to secure storage · the analysis model is not connected yet.' : 'Choose a valid file, complete the study ID, and select signal settings.'}</Text></View>
+    <GlassPanel style={styles.section}><Text style={styles.heading}>Model input</Text><Text style={styles.copy}>{study.sampleRate ? `Detected: ${study.sampleRate} Hz · first ECG channel: ${study.lead || 'not named'}. The model processes complete one-minute windows.` : 'Sampling rate and first channel are validated from the WFDB header.'}</Text></GlassPanel>
+    <View style={styles.footer}><AppButton onPress={begin} disabled={!ready || loading || saving} style={styles.cta}><Text style={styles.primaryText}>{saving ? 'Uploading…' : 'Upload and analyze'}</Text></AppButton>{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}<Text style={styles.copy}>{ready ? 'The recording is uploaded to private storage and sent to the inference server.' : 'Choose a matching WFDB pair, complete the study ID, and provide a 100 Hz ECG.'}</Text></View>
   </ScrollView>;
 }
 

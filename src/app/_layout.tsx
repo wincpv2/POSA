@@ -3,6 +3,7 @@ import '../global.css';
 import { Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold, Nunito_800ExtraBold } from '@expo-google-fonts/nunito';
 import { useFonts } from 'expo-font';
 import { Slot, usePathname } from 'expo-router';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ActivityIndicator, View } from 'react-native';
 
 import PosaShell from '@/components/posa-shell';
@@ -32,5 +33,5 @@ export default function RootLayout() {
     [fonts.extraBold]: Nunito_800ExtraBold,
   });
   if (!loaded && !error) return <Spinner />;
-  return <AuthProvider><Gate /></AuthProvider>;
+  return <GestureHandlerRootView style={{ flex: 1 }}><AuthProvider><Gate /></AuthProvider></GestureHandlerRootView>;
 }

@@ -9,22 +9,7 @@ export function parseRecordHeader(name: string, bytes: Uint8Array) {
     const lead = lines[1]?.trim().split(/\s+/).at(-1) || '';
     return { format: 'wfdb' as const, sampleRate, lead };
   }
-  if (/\.edf$/i.test(name)) {
-    if (bytes.length < 256) throw new Error('EDF header is shorter than 256 bytes.');
-    const field = (from: number, length: number) => text.slice(from, from + length).trim();
-    const headerBytes = Number(field(184, 8));
-    const signals = Number(field(252, 4));
-    const duration = Number(field(244, 8));
-    if (!Number.isInteger(signals) || signals < 1 || !Number.isInteger(headerBytes) || headerBytes < 256 + signals * 256 || bytes.length < headerBytes || !Number.isFinite(duration) || duration <= 0) throw new Error('EDF header fields are invalid or incomplete.');
-    const labels = Array.from({ length: signals }, (_, i) => field(256 + i * 16, 16));
-    const samplesAt = 256 + signals * 216;
-    const samples = Array.from({ length: signals }, (_, i) => Number(field(samplesAt + i * 8, 8)));
-    const ecg = labels.findIndex((label) => /ECG|EKG|LEAD/i.test(label));
-    const valid = ecg >= 0 && Number.isFinite(samples[ecg]) && samples[ecg] > 0 ? ecg : samples.findIndex((value) => Number.isFinite(value) && value > 0);
-    if (valid < 0) throw new Error('EDF sampling information is missing.');
-    return { format: 'edf' as const, sampleRate: samples[valid] / duration, lead: labels[valid] || 'ECG' };
-  }
-  throw new Error('Choose an EDF file or a WFDB .hea header with its matching .dat file.');
+  throw new Error('Choose a WFDB .hea header with its matching .dat file.');
 }
 
 export function formatDeidentifiedStudyId(input: string) {

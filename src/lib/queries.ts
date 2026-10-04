@@ -21,6 +21,28 @@ export type RecentEcgUpload = {
   samplingRateHz: number | null;
   leadConfiguration: string | null;
   originalFilename: string | null;
+  durationSeconds: number | null;
+  latestRun: PredictionRun | null;
+};
+
+export type PredictionRun = {
+  id: string;
+  ecg_upload_id: string;
+  model_id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  progress_percent: number;
+  total_minutes: number | null;
+  apnea_minutes: number | null;
+  apnea_percent: number | null;
+  error_message: string | null;
+  created_at: string;
+};
+
+export type PredictionMinute = {
+  run_id: string;
+  minute_index: number;
+  apnea_probability: number;
+  is_apnea: boolean;
 };
 
 // ecg_uploads' own RLS already scopes this to studies the signed-in clinician
@@ -34,7 +56,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
 
   const { data: uploads, error: uploadsError } = await supabase
     .from('ecg_uploads')
-    .select('id, record_code, status, created_at, patient_id, clinician_id, age_years, sampling_rate_hz, lead_configuration, original_filename, patients(sex, bmi)')
+    .select('id, record_code, status, created_at, patient_id, clinician_id, age_years, sampling_rate_hz, lead_configuration, original_filename, duration_seconds, patients(sex, bmi)')
     .order('created_at', { ascending: false })
     .limit(limit);
   if (uploadsError) throw uploadsError;
@@ -51,6 +73,14 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
   if (relationsError) throw relationsError;
 
   const subjectCodeByPatient = new Map((relations ?? []).map((r) => [r.patient_id, r.subject_code]));
+  const { data: runs, error: runsError } = await supabase
+    .from('prediction_runs')
+    .select('id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at')
+    .in('ecg_upload_id', uploads.map((row) => row.id))
+    .order('created_at', { ascending: false });
+  if (runsError) throw runsError;
+  const latestRunByUpload = new Map<string, PredictionRun>();
+  for (const run of (runs ?? []) as PredictionRun[]) if (!latestRunByUpload.has(run.ecg_upload_id)) latestRunByUpload.set(run.ecg_upload_id, run);
 
   return uploads.map((row) => ({
     id: row.id,
@@ -66,7 +96,70 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
     samplingRateHz: row.sampling_rate_hz,
     leadConfiguration: row.lead_configuration,
     originalFilename: row.original_filename,
+    durationSeconds: row.duration_seconds,
+    latestRun: latestRunByUpload.get(row.id) ?? null,
   }));
+}
+
+export async function getLatestPredictionRun(uploadId: string): Promise<PredictionRun | null> {
+  const { data, error } = await supabase.from('prediction_runs')
+    .select('id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at')
+    .eq('ecg_upload_id', uploadId).order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data as PredictionRun | null;
+}
+
+export async function listPredictionMinutes(runId: string): Promise<PredictionMinute[]> {
+  const { data, error } = await supabase.from('prediction_minutes')
+    .select('run_id, minute_index, apnea_probability, is_apnea')
+    .eq('run_id', runId).order('minute_index');
+  if (error) throw error;
+  return data ?? [];
+}
+
+export const SYMPTOM_TAGS = ['Chest pain', 'Palpitations', 'Shortness of breath', 'Dizziness'] as const;
+export type SymptomTag = (typeof SYMPTOM_TAGS)[number];
+export type EcgSymptomEvent = {
+  id: string;
+  ecg_upload_id: string;
+  occurred_at_seconds: number;
+  symptoms: SymptomTag[];
+  created_by: string;
+  created_at: string;
+};
+
+export async function listSymptomEvents(uploadId: string): Promise<EcgSymptomEvent[]> {
+  const { data, error } = await supabase
+    .from('ecg_symptom_events')
+    .select('id, ecg_upload_id, occurred_at_seconds, symptoms, created_by, created_at')
+    .eq('ecg_upload_id', uploadId)
+    .order('occurred_at_seconds');
+  if (error) throw error;
+  return (data ?? []) as EcgSymptomEvent[];
+}
+
+export async function addSymptomEvent(uploadId: string, seconds: number, symptoms: SymptomTag[]): Promise<EcgSymptomEvent> {
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  const clinicianId = userData.user?.id;
+  if (!clinicianId) throw new Error('Sign in again before recording symptoms.');
+  const uniqueSymptoms = [...new Set(symptoms)].filter((item): item is SymptomTag => SYMPTOM_TAGS.includes(item));
+  if (!Number.isFinite(seconds) || seconds < 0 || uniqueSymptoms.length === 0) throw new Error('Select at least one symptom at a valid recording time.');
+
+  const { data, error } = await supabase.from('ecg_symptom_events').insert({
+    ecg_upload_id: uploadId,
+    occurred_at_seconds: Number(seconds.toFixed(3)),
+    symptoms: uniqueSymptoms,
+    created_by: clinicianId,
+  }).select('id, ecg_upload_id, occurred_at_seconds, symptoms, created_by, created_at').single();
+  if (error) throw error;
+  return data as EcgSymptomEvent;
+}
+
+export async function deleteSymptomEvent(eventId: string): Promise<void> {
+  const { data, error } = await supabase.from('ecg_symptom_events').delete().eq('id', eventId).select('id').maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error('This symptom event could not be deleted.');
 }
 
 export type RosterPatient = {
@@ -206,6 +299,52 @@ export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string
   return { id: data.id };
 }
 
+export async function getEcgUploadOwner(uploadId: string): Promise<string> {
+  const { data, error } = await supabase.from('ecg_uploads')
+    .select('clinician_id').eq('id', uploadId).single();
+  if (error) throw error;
+  return data.clinician_id;
+}
+
+export async function uploadEcgAnnotations(
+  uploadId: string,
+  files: { uri: string; name: string; mimeType?: string | null }[],
+): Promise<void> {
+  const { data: auth, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('Sign in again before attaching annotations.');
+  const { data: study, error } = await supabase.from('ecg_uploads')
+    .select('clinician_id, storage_path').eq('id', uploadId).single();
+  if (error) throw error;
+  if (study.clinician_id !== userId) throw new Error('Only the clinician who uploaded this study can attach annotation files.');
+
+  const filename = study.storage_path.slice(study.storage_path.lastIndexOf('/') + 1);
+  const stem = filename.replace(/\.hea$/i, '').toLowerCase();
+  const seen = new Set<string>();
+  for (const file of files) {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if ((extension !== 'qrs' && extension !== 'apn') || file.name.replace(/\.[^.]+$/, '').toLowerCase() !== stem) {
+      throw new Error(`Choose .qrs or .apn annotations matching ${stem}.hea.`);
+    }
+    if (seen.has(extension)) throw new Error(`Choose only one .${extension} file.`);
+    seen.add(extension);
+  }
+
+  const folder = study.storage_path.slice(0, study.storage_path.lastIndexOf('/'));
+  for (const file of files) {
+    const response = await fetch(file.uri);
+    if (!response.ok) throw new Error(`Could not read ${file.name}.`);
+    const blob = await response.blob();
+    const { error: uploadError } = await supabase.storage.from('ecg-files').upload(
+      `${folder}/${file.name}`,
+      blob,
+      { contentType: file.mimeType ?? 'application/octet-stream', upsert: true },
+    );
+    if (uploadError) throw uploadError;
+  }
+}
+
 // Soft delete: the row and its files are kept, it just stops appearing (see
 // 20261004000005_soft_delete_ecg_upload.sql). Only the uploader may do it.
 export async function softDeleteEcgUpload(uploadId: string): Promise<void> {
@@ -262,6 +401,11 @@ export type SharedStudy = {
   samplingRateHz: number | null;
   leadConfiguration: string | null;
   expiresAt: string;
+  apneaMinutes: number | null;
+  totalMinutes: number | null;
+  apneaPercent: number | null;
+  patientExplanation: string | null;
+  approvedAt: string | null;
 };
 
 // Works without signing in: get_shared_study only returns the study for a
@@ -278,6 +422,11 @@ export async function getSharedStudy(token: string): Promise<SharedStudy | null>
     samplingRateHz: row.sampling_rate_hz,
     leadConfiguration: row.lead_configuration,
     expiresAt: row.expires_at,
+    apneaMinutes: row.apnea_minutes,
+    totalMinutes: row.total_minutes,
+    apneaPercent: row.apnea_percent,
+    patientExplanation: row.patient_explanation,
+    approvedAt: row.approved_at,
   };
 }
 
@@ -326,12 +475,15 @@ export type DashboardNight = {
   leadConfiguration: string | null;
   patientExplanation: string | null; // only once the clinician approved that night's report
   approvedAt: string | null;
+  apneaMinutes: number | null;
+  totalMinutes: number | null;
+  apneaPercent: number | null;
 };
 export type PatientDashboard = { expiresAt: string; nights: DashboardNight[] };
 
 type DashboardJson = {
   expires_at: string;
-  studies: { record_code: string | null; created_at: string; status: string; sampling_rate_hz: number | null; lead_configuration: string | null; patient_explanation: string | null; approved_at: string | null }[];
+  studies: { record_code: string | null; created_at: string; status: string; sampling_rate_hz: number | null; lead_configuration: string | null; apnea_minutes: number | null; total_minutes: number | null; apnea_percent: number | null; patient_explanation: string | null; approved_at: string | null }[];
 };
 
 // Works without signing in; null when the link is wrong, expired or revoked.
@@ -350,6 +502,9 @@ export async function getPatientDashboard(token: string): Promise<PatientDashboa
       leadConfiguration: s.lead_configuration,
       patientExplanation: s.patient_explanation,
       approvedAt: s.approved_at,
+      apneaMinutes: s.apnea_minutes,
+      totalMinutes: s.total_minutes,
+      apneaPercent: s.apnea_percent,
     })),
   };
 }

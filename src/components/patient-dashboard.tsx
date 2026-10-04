@@ -15,8 +15,6 @@ const statusLabel = (status: string) => status === 'failed' ? 'Analysis failed' 
 // QR code / link their clinician gives them; no account. Shows no identity:
 // get_patient_dashboard never returns it.
 //
-// The parameters are the same set as the clinician's Summary (sleep-results.tsx),
-// with patient-friendly wording; they show "—" until the analysis provides them.
 export default function PatientDashboard({ token, onBack }: { token: string; onBack: () => void }) {
   const [state, setState] = useState<{ loading: boolean; data: Dashboard | null; error: string }>({ loading: true, data: null, error: '' });
 
@@ -56,6 +54,7 @@ export default function PatientDashboard({ token, onBack }: { token: string; onB
                   <Text style={styles.latestDate}>{dateLabel(latest.createdAt)}</Text>
                   <StatusPill status={latest.status} reviewed={Boolean(latest.patientExplanation)} />
                 </View>
+                <ParameterGrid night={latest} />
                 <ClinicianMessage night={latest} />
               </> : <Text style={styles.copy}>No nights recorded yet. Your clinician will add them after each sleep study.</Text>}
             </GlassPanel>
@@ -87,6 +86,27 @@ export default function PatientDashboard({ token, onBack }: { token: string; onB
           </>
         )}
     </PublicScreen>
+  );
+}
+
+function ParameterGrid({ night }: { night: DashboardNight }) {
+  const pending = night.status !== 'failed' && !night.patientExplanation;
+  const available = Boolean(night.patientExplanation);
+  const values = [
+    ['Apnea-classified minutes', night.apneaMinutes == null || !available ? '—' : String(night.apneaMinutes)],
+    ['Analysed minutes', night.totalMinutes == null || !available ? '—' : String(night.totalMinutes)],
+    ['Apnea minute share', night.apneaPercent == null || !available ? '—' : `${night.apneaPercent.toFixed(1)}%`],
+  ];
+  return (
+    <View style={styles.grid}>
+      {values.map(([label, value]) => (
+        <View key={label} style={styles.tile}>
+          <Text style={styles.tileLabel}>{label}</Text>
+          <Text style={styles.tileValue}>{value}</Text>
+          <Text style={styles.tileSub}>{available ? 'Reviewed by your clinician' : pending ? 'Available after clinician approval' : 'Not available'}</Text>
+        </View>
+      ))}
+    </View>
   );
 }
 
