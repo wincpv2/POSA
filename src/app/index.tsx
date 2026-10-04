@@ -3,13 +3,29 @@ import { useEffect, useMemo, useState } from 'react';
 import Svg, { Path } from 'react-native-svg';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
-import { useUploadState, type Study } from '@/components/posa-state';
+import { sampleEvents, useUploadState, type ApneaEvent, type Study, type SummaryMetrics } from '@/components/posa-state';
 import { colors, fonts } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
 import { listRecentEcgUploads, restoreEcgUpload, softDeleteEcgUpload, timeAgo, type RecentEcgUpload } from '@/lib/queries';
 
-type StudyStatus = 'Awaiting analysis' | 'Processing' | 'Failed';
-type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; detail: string; ago: string; upload: RecentEcgUpload };
+type StudyStatus = 'Awaiting analysis' | 'Needs review' | 'Processing' | 'Approved' | 'Failed';
+// The illustrative sample studies from the team's UI (shown after real uploads,
+// labelled SAMPLE, never deletable). They open with full sample charts.
+type SampleRow = { id: string; status: StudyStatus; age: string; sex: string; duration: string; severity: string; burden: string; total: number; ago: string; progress?: number; apneaMinutes: string; clearMinutes: string; metrics: SummaryMetrics | null };
+type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; detail: string; ago: string; upload?: RecentEcgUpload; sample?: SampleRow };
+
+const samples: SampleRow[] = [
+  { id: 'REC-8842-PT', status: 'Needs review', age: '54', sex: 'M', duration: '08:30:00', severity: 'Severe OSA', burden: '47.2%', total: 17, ago: '10 min ago', apneaMinutes: '240', clearMinutes: '268', metrics: { rPeakCount: 41820, annotationRuns: 9, medianHrBpm: 82, sdnnMs: 87, rmssdMs: 45, validRrPercent: 100 } },
+  { id: 'REC-8841-KL', status: 'Needs review', age: '61', sex: 'M', duration: '08:12:00', severity: 'Severe OSA', burden: '49.3%', total: 19, ago: '42 min ago', apneaMinutes: '242', clearMinutes: '250', metrics: null },
+  { id: 'REC-8839-MN', status: 'Needs review', age: '47', sex: 'F', duration: '07:48:00', severity: 'Severe OSA', burden: '47.6%', total: 15, ago: '1 h 15 min ago', apneaMinutes: '223', clearMinutes: '245', metrics: null },
+  { id: 'REC-8845-QA', status: 'Processing', age: '58', sex: 'M', duration: '08:00:00', severity: 'Pending', burden: '', total: 19, ago: '8 min ago', progress: 62, apneaMinutes: '', clearMinutes: '', metrics: null },
+  { id: 'REC-8827-TS', status: 'Approved', age: '66', sex: 'M', duration: '07:30:00', severity: 'Moderate', burden: '31.0%', total: 12, ago: 'Yesterday', apneaMinutes: '140', clearMinutes: '310', metrics: null },
+  { id: 'REC-8829-RX', status: 'Approved', age: '39', sex: 'F', duration: '07:18:00', severity: 'Mild / Normal', burden: '16.6%', total: 4, ago: '5 h 20 min ago', apneaMinutes: '73', clearMinutes: '365', metrics: null },
+];
+const sampleRecords: StudyRecord[] = samples.map((row) => ({ id: row.id, status: row.status, age: row.age, sex: row.sex === 'M' ? 'Male' : 'Female', detail: row.duration, ago: row.ago, sample: row }));
+function makeEvents(count: number): ApneaEvent[] {
+  return Array.from({ length: count }, (_, index) => ({ ...sampleEvents[index % sampleEvents.length], id: index + 1 }));
+}
 
 const statusOf = (dbStatus: string): StudyStatus => dbStatus === 'processing' ? 'Processing' : dbStatus === 'failed' ? 'Failed' : 'Awaiting analysis';
 const formatOf = (name: string | null): Study['format'] => /\.edf\b/i.test(name ?? '') ? 'edf' : /\.(hea|dat)\b/i.test(name ?? '') ? 'wfdb' : /\.(png|jpe?g|tiff?)\b/i.test(name ?? '') ? 'image' : null;
@@ -24,7 +40,7 @@ function toRecord(upload: RecentEcgUpload): StudyRecord {
 
 const sexLabel = (value: string | null) => value === 'unspecified' ? 'Unknown' : value ? value[0].toUpperCase() + value.slice(1) : '';
 
-const filterLabels = ['All', 'Awaiting analysis', 'Processing', 'Failed'] as const;
+const filterLabels = ['All', 'Awaiting analysis', 'Needs review', 'Processing', 'Approved', 'Failed'] as const;
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
@@ -56,13 +72,15 @@ export default function HomeScreen() {
 
   const messageOf = (reason: unknown, fallback: string) => typeof reason === 'object' && reason && 'message' in reason ? String(reason.message) : fallback;
   const remove = async (record: StudyRecord) => {
-    setBusyId(record.upload.id);
+    const upload = record.upload;
+    if (!upload) return;
+    setBusyId(upload.id);
     setActionError('');
     try {
-      await softDeleteEcgUpload(record.upload.id);
-      setRecords((rows) => rows.filter((row) => row.upload.id !== record.upload.id));
-      setDeleted({ id: record.upload.id, code: record.id });
-      if (study.uploadId === record.upload.id) reset();
+      await softDeleteEcgUpload(upload.id);
+      setRecords((rows) => rows.filter((row) => row.upload?.id !== upload.id));
+      setDeleted({ id: upload.id, code: record.id });
+      if (study.uploadId === upload.id) reset();
     } catch (reason) { setActionError(messageOf(reason, 'Could not delete the study.')); }
     finally { setBusyId(null); setConfirmId(null); }
   };
@@ -73,12 +91,28 @@ export default function HomeScreen() {
     catch (reason) { setActionError(messageOf(reason, 'Could not restore the study.')); }
   };
 
-  const filters = filterLabels.map((label) => ({ label, count: label === 'All' ? records.length : records.filter((record) => record.status === label).length }));
-  const visible = useMemo(() => records.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [records, filter, query]);
+  const allRecords = useMemo(() => [...records, ...sampleRecords], [records]);
+  const filters = filterLabels
+    .map((label) => ({ label, count: label === 'All' ? allRecords.length : allRecords.filter((record) => record.status === label).length }))
+    .filter((item) => item.label === 'All' || item.count > 0 || item.label === filter);
+  const visible = useMemo(() => allRecords.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [allRecords, filter, query]);
   const awaiting = records.filter((record) => record.status === 'Awaiting analysis').length;
 
   const open = (record: StudyRecord) => {
-    const { upload } = record;
+    const { upload, sample } = record;
+    if (sample) {
+      update({
+        studyId: sample.id, fileName: `${sample.id.toLowerCase()}.edf`, format: 'edf', sampleRate: 250, lead: 'Lead II',
+        age: sample.age, sex: sample.sex === 'M' ? 'Male' : 'Female', bmi: sample.id === 'REC-8842-PT' ? '29.8' : '', severity: sample.severity,
+        apneaBurden: sample.burden, apneaMinutes: sample.apneaMinutes, noEventMinutes: sample.clearMinutes, duration: sample.duration,
+        metadata: 'Sample record · illustrative values', status: sample.status === 'Processing' ? 'processing' : 'ready',
+        progress: sample.progress ?? 100, events: makeEvents(sample.total), summaryMetrics: sample.metrics,
+        reportStatus: sample.status === 'Approved' ? 'Approved' : 'Draft', uploadId: null, patientId: null,
+      });
+      router.push(sample.status === 'Processing' ? '/processing' : sample.status === 'Approved' ? '/summary' : '/detail');
+      return;
+    }
+    if (!upload) return;
     update({
       studyId: record.id, fileName: upload.originalFilename, format: formatOf(upload.originalFilename), sampleRate: upload.samplingRateHz, lead: upload.leadConfiguration ?? '',
       age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '', severity: 'Pending',
@@ -115,7 +149,7 @@ export default function HomeScreen() {
           <View style={styles.recordList}>
             {loading ? <ActivityIndicator color={colors.accent} />
               : loadError ? <Text accessibilityRole="alert" style={styles.empty}>Could not load studies: {loadError}</Text>
-              : visible.length ? visible.map((record) => <StudyRow key={record.upload.id} record={record} compact={!wide} onPress={() => open(record)} canDelete={record.upload.clinicianId === myId} confirming={confirmId === record.upload.id} busy={busyId === record.upload.id} onAskDelete={() => setConfirmId(record.upload.id)} onCancelDelete={() => setConfirmId(null)} onDelete={() => { void remove(record); }} />)
+              : visible.length ? visible.map((record) => <StudyRow key={record.upload?.id ?? record.id} record={record} compact={!wide} onPress={() => open(record)} canDelete={Boolean(record.upload) && record.upload?.clinicianId === myId} confirming={Boolean(record.upload) && confirmId === record.upload?.id} busy={Boolean(record.upload) && busyId === record.upload?.id} onAskDelete={() => setConfirmId(record.upload?.id ?? null)} onCancelDelete={() => setConfirmId(null)} onDelete={() => { void remove(record); }} />)
               : <Text style={styles.empty}>{records.length ? 'No studies match this search and filter.' : 'No studies yet. Press "+ Start new study" to upload your first ECG recording.'}</Text>}
           </View>
         </GlassPanel>
@@ -132,7 +166,7 @@ export default function HomeScreen() {
         </GlassPanel>
         <GlassPanel style={styles.sidePanel}>
           <Text style={styles.sectionTitle}>Recent activity</Text>
-          <View style={styles.activityList}>{records.slice(0, 5).map((record) => <View key={record.upload.id} style={styles.activityRow}><Text style={styles.activityTitle}>Uploaded {record.id}</Text><Text style={styles.activityTime}>{record.ago}</Text></View>)}{!records.length && !loading ? <Text style={styles.subCopy}>Nothing yet.</Text> : null}</View>
+          <View style={styles.activityList}>{records.slice(0, 5).map((record) => <View key={record.upload?.id ?? record.id} style={styles.activityRow}><Text style={styles.activityTitle}>Uploaded {record.id}</Text><Text style={styles.activityTime}>{record.ago}</Text></View>)}{!records.length && !loading ? <Text style={styles.subCopy}>Nothing yet.</Text> : null}</View>
         </GlassPanel>
       </View>
     </View>
@@ -153,10 +187,11 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
   return <View style={styles.rowWrap}>
     <Pressable accessibilityRole="button" accessibilityLabel={`${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
       <View style={[styles.studyRow, compact && styles.studyRowCompact]}>
-        <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
-        <View style={[styles.severityBadge, styles.pendingBadge]}><Text style={styles.severityText}>○ Pending</Text></View>
-        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: record.status === 'Awaiting analysis' ? '0%' : '100%' }]} /></View></View>
-        <View style={styles.reviewBlock}><Text style={styles.reviewText}>Stored</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
+        <View style={styles.identity}><View style={styles.idRow}><Text style={styles.studyId}>{record.id}</Text>{record.sample ? <Text style={styles.sampleTag}>SAMPLE</Text> : null}</View><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
+        {record.sample ? <View style={[styles.severityBadge, record.sample.severity === 'Severe OSA' && styles.severeBadge, record.sample.severity === 'Moderate' && styles.moderateBadge, record.sample.severity === 'Mild / Normal' && styles.mildBadge, record.sample.severity === 'Pending' && styles.pendingBadge]}><Text style={[styles.severityText, record.sample.severity !== 'Pending' && styles.badgeDark]}>{record.sample.severity === 'Severe OSA' ? '▲' : record.sample.severity === 'Moderate' ? '◆' : record.sample.severity === 'Mild / Normal' ? '✓' : '○'} {record.sample.severity}{record.sample.burden ? ` · ${record.sample.burden}` : ''}</Text></View>
+          : <View style={[styles.severityBadge, styles.pendingBadge]}><Text style={styles.severityText}>○ Pending</Text></View>}
+        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.sample ? (record.status === 'Processing' ? `Processing ${record.sample.progress ?? 0}%` : record.status === 'Approved' ? 'Report approved' : 'Report needs review') : record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: record.status === 'Awaiting analysis' ? '0%' : '100%' }]} /></View></View>
+        <View style={styles.reviewBlock}><Text style={styles.reviewText}>{record.sample ? `${record.sample.total} apnea events` : 'Stored'}</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
       </View>
     </Pressable>
     {canDelete ? <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${record.id}`} onPress={onAskDelete} style={({ pressed }) => [styles.trash, pressed && styles.pressed]}>
@@ -168,6 +203,7 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
 function Kpi({ value, label }: { value: string; label: string }) { return <View style={styles.kpi}><Text style={styles.kpiValue}>{value}</Text><Text style={styles.kpiLabel}>{label}</Text></View>; }
 
 const styles = StyleSheet.create({
+  idRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, sampleTag: { color: colors.accentText, backgroundColor: '#FFD166', fontSize: 11, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, overflow: 'hidden' },
   rowWrap: { flexDirection: 'row', alignItems: 'stretch', gap: 6 }, rowMain: { flex: 1 },
   trash: { width: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: 'rgba(2,3,58,0.42)' },
   confirmRow: { borderWidth: 1, borderColor: colors.coral },
