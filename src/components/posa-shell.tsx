@@ -8,6 +8,7 @@ import { PosaText } from './posa-ui';
 import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
 import { useAuth } from '@/lib/auth-context';
+import { PosaMark } from './posa-logo';
 
 function initialsOf(name: string) {
   const parts = name.split(/[\s@.]+/).filter(Boolean);
@@ -47,7 +48,7 @@ function Workspace() {
     <StatusBar style="light" />
     <View style={styles.header}>
       <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
-        <PosaText style={styles.moon}>{'\u263e'}</PosaText><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
+        <PosaMark size={28} /><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
       </Pressable></Link>
       <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${displayName}. Open account menu`} accessibilityState={{ expanded: menuOpen }} onPress={() => setMenuOpen((open) => !open)} style={[styles.avatar, menuOpen && styles.avatarOpen]}><PosaText style={styles.avatarText}>{initialsOf(displayName)}</PosaText></Pressable>
     </View>
@@ -113,7 +114,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
   header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
-  moon: { color: colors.muted, fontSize: 22 }, brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
+  brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
   avatar: { width: 42, height: 42, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   contentTop: { width: '100%', maxWidth: 1440, alignSelf: 'center', paddingHorizontal: 20, gap: 8 }, contentTopCompact: { paddingHorizontal: 12 },
   caseChip: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },

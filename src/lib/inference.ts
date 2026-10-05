@@ -35,8 +35,8 @@ export type RecordSummary = {
   heartRateByMinute: { minuteIndex: number; medianBpm: number }[];
   rrHistogram: { edgesSeconds: number[]; counts: number[] };
   charts: {
-    screen: { fullNightOverviewSvg: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
-    print: { fullNightOverviewSvg: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
+    screen: { fullNightOverviewSvg: string; modelPredictionSvg?: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
+    print: { fullNightOverviewSvg: string; modelPredictionSvg?: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
   };
   modelMetrics: {
     runId: string | null;

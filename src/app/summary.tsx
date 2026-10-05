@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import * as Linking from 'expo-linking';
-import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
+import { AppButton, DetailsDisclosure, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import ShareWithPatient from '@/components/share-with-patient';
 import { exportReportPdf, reportPdfBlob } from '@/components/report-export';
-import { NightSummaryPanel } from '@/components/night-summary';
+import { Chart as PythonChart, NightSummaryPanel } from '@/components/night-summary';
 import { getRecordSummary, type RecordSummary } from '@/lib/inference';
 import { useAuth } from '@/lib/auth-context';
 import { EMPTY_REPORT, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listReportPdfs, listSymptomEvents, reportPdfUrl, saveReportPdf, saveStudyReportText, setStudyReportStatus, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type ReportStatus, type SavedReportPdf, type StudyReport } from '@/lib/queries';
@@ -16,6 +16,7 @@ const duration = (seconds: number | null | undefined) => seconds == null ? '—'
 const signedLine = (name: string | null, at: string | null) => name && at ? `${name} · ${new Date(at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}` : '—';
 const sameInstant = (a: string | null, b: string | null) => Boolean(a && b) && new Date(a as string).getTime() === new Date(b as string).getTime();
 const stages = ['Draft', 'Reviewed', 'Approved'] as const;
+const unavailableClinicalMetrics = ['Clinical AHI', 'AI', 'HI', 'Obstructive apnea count', 'Central apnea count', 'Mixed apnea count', 'Hypopnoea count', 'ODI', 'SpO₂ baseline', 'SpO₂ average', 'SpO₂ lowest'] as const;
 
 export default function SummaryScreen() {
   const { study, update } = useUploadState();
@@ -80,6 +81,8 @@ export default function SummaryScreen() {
   const completed = run?.status === 'completed';
   const currentRecordSummary = recordSummary?.uploadId === uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
   const estimates = currentRecordSummary?.modelMetrics;
+  const proxyAhi = run?.status === 'completed' && run.total_minutes != null && run.total_minutes > 0 && run.apnea_minutes != null
+    ? run.apnea_minutes / (run.total_minutes / 60) : null;
   const dirty = opinion !== report.clinicianOpinion || explanation !== report.patientExplanation;
   const apply = (next: StudyReport) => { setReport(next); setOpinion(next.clinicianOpinion); setExplanation(next.patientExplanation); update({ reportStatus: next.status }); };
 
@@ -185,9 +188,14 @@ export default function SummaryScreen() {
     <GlassPanel style={styles.panel}>
       <Text style={styles.title}>Clinical PSG / SpO₂ results</Text>
       <View style={styles.clinicalGrid}>
-        {['AHI', 'AI', 'HI', 'Obstructive apnea count', 'Central apnea count', 'Mixed apnea count', 'Hypopnoea count', 'ODI', 'SpO₂ baseline', 'SpO₂ average', 'SpO₂ lowest'].map((label) => <View key={label} style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>{label}</Text><Text style={styles.clinicalValue}>N/A</Text></View>)}
+        <View style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>Estimated AHI proxy (model)</Text><Text style={styles.clinicalValue}>{proxyAhi == null ? 'Unavailable' : proxyAhi.toFixed(1) + ' /h'}</Text></View>
+        <View style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>Model-positive windows</Text><Text style={styles.clinicalValue}>{run?.status === 'completed' ? String(run.apnea_minutes ?? '—') + ' / ' + String(run.total_minutes) : 'Unavailable'}</Text></View>
+        <View style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>Model-positive share</Text><Text style={styles.clinicalValue}>{run?.status === 'completed' && run.apnea_percent != null ? run.apnea_percent.toFixed(1) + '%' : 'Unavailable'}</Text></View>
       </View>
-      <Text style={styles.note}>The ECG upload has no airflow, respiratory effort, sleep staging, arousal, or oximetry channels. These PSG/SpO₂ results cannot be derived from model minute labels.</Text>
+      <Text style={styles.note}>Proxy = positive 1-minute windows ÷ analyzed hours. It assumes one event per positive window and treats analyzed time as sleep time; it is not clinical AHI. ECG does not measure airflow, respiratory effort, sleep staging, arousals, or SpO₂.</Text>
+      <DetailsDisclosure title="Show unavailable PSG / SpO₂ values (11)">
+        <View style={styles.clinicalGrid}>{unavailableClinicalMetrics.map((label) => <View key={label} style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>{label}</Text><Text style={styles.clinicalValue}>N/A</Text></View>)}</View>
+      </DetailsDisclosure>
     </GlassPanel>
 
     <GlassPanel style={styles.panel}>
@@ -197,8 +205,9 @@ export default function SummaryScreen() {
       <View style={styles.reportBody}>{tab === 'Clinician report' ? <>
         <Text style={styles.fieldLabel}>System findings</Text>
         <Text style={styles.copy}>{completed ? `${run.apnea_minutes} apnea-classified minutes out of ${run.total_minutes} analysed minutes (${run.apnea_percent?.toFixed(1)}%).` : 'No completed model result.'}</Text>
+        <PythonChart title="Minute-by-minute model predictions · 50% threshold" xml={currentRecordSummary?.charts.screen.modelPredictionSvg} aspect={14 / 2.7} wide />
         <Text style={styles.fieldLabel}>Clinical sleep indices</Text>
-        <Text style={styles.copy}>AHI / AI / HI: N/A · obstructive, central, and mixed apnea: N/A · hypopnoea count: N/A · ODI and SpO₂ values: N/A. These require PSG airflow/effort channels and oximetry, which are not present in the ECG-only recording.</Text>
+        <Text style={styles.copy}>{proxyAhi == null ? 'No model-derived AHI proxy is available.' : 'Estimated AHI proxy: ' + proxyAhi.toFixed(1) + ' /h. This uses one model-positive minute window as one apnea/hypopnea event and analyzed time as sleep time; it is not a clinical AHI.'}</Text>
         <Text style={styles.fieldLabel}>Clinician opinion</Text>
         <TextInput multiline editable={editable} value={opinion} onChangeText={setOpinion} placeholder="Clinician interpretation and recommendations" placeholderTextColor={colors.muted} style={[styles.input, !editable && styles.inputLocked]} accessibilityLabel="Clinician opinion" />
       </> : <>

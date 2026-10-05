@@ -2,6 +2,8 @@
 
 # dependencies
 node_modules/
+release/
+release-retry/
 __pycache__/
 *.py[cod]
 

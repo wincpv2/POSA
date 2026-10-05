@@ -20,7 +20,7 @@ function Gate() {
   const pathname = usePathname();
   // Patient links (dashboard /p/…, single study /shared/…) open for anyone,
   // signed in or not.
-  if (pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
+  if (pathname === '/auth/callback' || pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
   if (loading) return <Spinner />;
   return session ? <PosaShell /> : <RoleSelect />;
 }

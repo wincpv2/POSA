@@ -1,0 +1,28 @@
+{
+  "name": "posa-desktop",
+  "version": "1.0.0",
+  "description": "POSA ECG sleep lab desktop app",
+  "author": "POSA",
+  "private": true,
+  "main": "main.cjs",
+  "devDependencies": {
+    "electron": "44.5.1"
+  },
+  "build": {
+    "appId": "com.posa.sleepapp.desktop",
+    "productName": "POSA",
+    "directories": { "output": "../release" },
+    "files": ["main.cjs", "posa.ico", "package.json"],
+    "win": {
+      "icon": "posa.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

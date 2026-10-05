@@ -49,7 +49,7 @@ export function NightSummaryPanel({ summary, loading, error, run, minutes, durat
 }
 function Metric({ label, value }: { label: string; value: string }) { return <View style={styles.metric}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{value}</Text></View>; }
 const estimateValue = (value: number | null, suffix = '') => value == null ? 'Unavailable' : `${value.toFixed(0)}${suffix}`;
-function Chart({ title, xml, aspect, wide, half }: { title: string; xml?: string; aspect: number; wide?: boolean; half?: boolean }) {
+export function Chart({ title, xml, aspect, wide, half }: { title: string; xml?: string; aspect: number; wide?: boolean; half?: boolean }) {
   const [width, setWidth] = useState(0);
   return <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={[styles.chart, wide && styles.chartWide, half && styles.chartHalf]}>
     <Text style={styles.chartTitle}>{title}</Text>

@@ -31,7 +31,6 @@ type WaveformProps = {
   viewStartSec: number;
   viewSeconds: number;
   playing: boolean;
-  apnea: boolean;
   apneaIntervals: Interval[];
   events: EcgSymptomEvent[];
   uploadId: string | undefined;
@@ -46,7 +45,7 @@ type WaveformProps = {
 export function EcgWaveform(props: WaveformProps) {
   const {
     signal, signalPending, signalError, onRetry, currentMinute, currentSecond,
-    totalDuration, viewStartSec, viewSeconds, playing, apnea,
+    totalDuration, viewStartSec, viewSeconds, playing,
     apneaIntervals, events, uploadId, selectedPeak, onSelectedPeak,
     onViewStart, onViewSeconds, onPlaying, onSeek,
   } = props;
@@ -379,10 +378,9 @@ export function EcgWaveform(props: WaveformProps) {
   >
     {plotted ? <Svg width="100%" height="100%" viewBox="0 0 1000 320" preserveAspectRatio="none">
       <Rect width="1000" height="320" fill="#102333" />
+      {plotted.apneaSpans.map((span, index) => <Rect key={`apnea-bg${index}`} x={span.x} y={plot.top} width={Math.max(1, span.width)} height={plot.bottom - plot.top} fill="#F16A78" opacity={0.16} />)}
       {Array.from({ length: 16 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * (plot.bottom - plot.top) / 15} y2={plot.top + index * (plot.bottom - plot.top) / 15} stroke={index % 5 === 0 ? '#3B5668' : '#263D4D'} strokeWidth={index % 5 === 0 ? 1.2 : 0.75} />)}
       {plotted.xGrid.map((line, index) => <Line key={`v${index}`} x1={line.x} x2={line.x} y1={plot.top} y2={plot.bottom} stroke={line.major ? '#3B5668' : '#263D4D'} strokeWidth={line.major ? 1.2 : 0.75} />)}
-      {apnea ? <Rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={6} fill="#F16A78" opacity={0.9} /> : null}
-      {plotted.apneaSpans.map((span, index) => <Rect key={`apnea${index}`} x={span.x} y={plot.top + 6} width={Math.max(1, span.width)} height={5} fill="#F16A78" opacity={0.9} />)}
       {plotted.symptomMarkers.map((x, index) => <Line key={`s${index}`} x1={x} x2={x} y1={plot.top} y2={plot.bottom} stroke="#FFC857" strokeDasharray="4 4" strokeWidth={1.5} />)}
       <Path d={plotted.path} fill="none" stroke="#53D5C5" strokeWidth={2.3} />
       {plotted.peaks.map((peak) => <Circle key={`r${peak.index}`} cx={peak.x} cy={peak.y} r={peak.selected ? 6 : peak.neighbor ? 4.5 : 3.5} fill={peak.neighbor ? '#102333' : '#FFC857'} stroke={peak.neighbor ? '#53D5C5' : '#102333'} strokeWidth={peak.selected || peak.neighbor ? 1.5 : 1} />)}

@@ -353,7 +353,6 @@ export default function DetailScreen() {
           viewStartSec={viewStartSec}
           viewSeconds={viewSeconds}
           playing={playing}
-          apnea={Boolean(currentPrediction?.is_apnea)}
           apneaIntervals={apneaIntervals}
           events={events}
           uploadId={study.uploadId}

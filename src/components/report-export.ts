@@ -7,6 +7,7 @@ import type { EcgSymptomEvent, PredictionRun, StudyReport } from '@/lib/queries'
 
 import type { Study } from './posa-state';
 import { FULL_DISCLAIMER } from './public-screen';
+import { POSA_MARK_SVG } from './posa-logo';
 
 export type ReportOptions = {
   study: Study;
@@ -35,6 +36,10 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
   const apneaLabelMinutes = recordSummary?.apneaLabelMinutes;
   const annotationShare = labelledMinutes && apneaLabelMinutes != null ? `${(apneaLabelMinutes * 100 / labelledMinutes).toFixed(1)}%` : 'Unavailable';
   const recordingSeconds = safe(recordSummary?.durationSeconds) || safe(study.durationSeconds) || safe(prediction?.total_minutes) * 60;
+  const modelPositiveWindows = completed && prediction?.apnea_minutes != null ? prediction.apnea_minutes : null;
+  const modelTotalWindows = completed && prediction?.total_minutes != null ? prediction.total_minutes : null;
+  const proxyAhi = modelPositiveWindows != null && modelTotalWindows != null && modelTotalWindows > 0
+    ? modelPositiveWindows / (modelTotalWindows / 60) : null;
   const modelResults = completed
     ? `<div class="grid">${cell('Analyzed minutes', prediction.total_minutes)}${cell('Model apnea-classified minutes', prediction.apnea_minutes)}${cell('Model apnea minute share', prediction.apnea_percent == null ? null : `${prediction.apnea_percent.toFixed(1)}%`)}${cell('Probability threshold', '50%')}${cell('Model ID', prediction.model_id)}</div>`
     : '<p>No completed model analysis is available.</p>';
@@ -59,12 +64,10 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
     ${cell('Probability threshold', modelMetrics?.threshold == null ? null : `${(modelMetrics.threshold * 100).toFixed(0)}%`)}
   </div>`;
   const clinicalResults = `<div class="grid">
-    ${cell('AHI (Apnea-Hypopnea Index)', 'N/A · requires PSG and sleep time')}${cell('AI (Apnea Index)', 'N/A · requires scored respiratory events')}
-    ${cell('HI (Hypopnea Index)', 'N/A · requires airflow, desaturation/arousal scoring')}${cell('Obstructive apnea count', 'N/A · requires airflow and effort channels')}
-    ${cell('Central apnea count', 'N/A · requires airflow and effort channels')}${cell('Mixed apnea count', 'N/A · requires airflow and effort channels')}
-    ${cell('Hypopnoea count', 'N/A · requires PSG scoring')}${cell('ODI', 'N/A · requires SpO₂ oximetry')}
-    ${cell('SpO₂ baseline', 'N/A · requires SpO₂ oximetry')}${cell('SpO₂ average', 'N/A · requires SpO₂ oximetry')}${cell('SpO₂ lowest', 'N/A · requires SpO₂ oximetry')}
-  </div>`;
+    ${cell('Estimated AHI proxy (model)', proxyAhi == null ? null : `${proxyAhi.toFixed(1)} events/h`)}
+    ${cell('Model-positive windows / analyzed windows', modelPositiveWindows == null || modelTotalWindows == null ? null : `${modelPositiveWindows} / ${modelTotalWindows}`)}
+    ${cell('Model-positive share', completed && prediction?.apnea_percent != null ? `${prediction.apnea_percent.toFixed(1)}%` : null)}
+  </div><p class="note">Proxy = positive 1-minute windows / analyzed hours. Assumes one apnea/hypopnea event per positive window and treats analyzed time as sleep time. This is not a clinical AHI. Clinical AHI, AI/HI, apnea subtype counts, ODI and SpO2 values are unavailable from ECG-only data.</p>`;
   const symptoms = symptomEvents.length
     ? `<table><thead><tr><th>Recording time</th><th>Symptoms</th></tr></thead><tbody>${symptomEvents.map((event) => `<tr><td>${timeLabel(event.occurred_at_seconds)}</td><td>${event.symptoms.map(escape).join(', ')}</td></tr>`).join('')}</tbody></table>`
     : '<p class="note">No symptoms were recorded.</p>';
@@ -76,7 +79,7 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
   * { box-sizing: border-box; }
   body { font-family: 'Nunito', 'Arial', sans-serif; color: #10203a; font-size: 10.5pt; line-height: 1.42; margin: 0; }
   header { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #04065e; padding-bottom:7px; margin-bottom:14px; }
-  .brand { color:#04065e; font-size:21pt; font-weight:800; } .brand small { color:#0077b6; font-size:10pt; margin-left:7px; }
+  .brand { display:flex; align-items:center; gap:7px; color:#04065e; font-size:21pt; font-weight:800; } .brand small { color:#0077b6; font-size:10pt; margin-left:7px; } .brand-mark,.brand-mark svg { width:25px; height:25px; display:block; }
   .status { border:2px solid ${approved ? '#0b7a55' : '#b54708'}; border-radius:99px; padding:3px 11px; color:${approved ? '#0b7a55' : '#b54708'}; font-weight:800; }
   h1 { font-size:18pt; margin:0 0 4px; } h2 { margin:14px 0 6px; padding:5px 8px; background:#34404a; color:#fff; font-size:12pt; font-weight:700; }
   h3 { color:#0077b6; font-size:10pt; margin:10px 0 4px; } p { margin:0 0 7px; }
@@ -86,13 +89,13 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
   table { width:100%; border-collapse:collapse; } th,td { padding:5px 7px; text-align:left; border-bottom:1px solid #d5dde5; } th { color:#52616b; font-weight:600; }
   .page-break { break-before:page; page-break-before:always; } .chart { width:100%; display:block; margin:5px 0 12px; }
   .charts { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .charts svg { width:100%; height:auto; }
-  .signoff td { height:28px; } .disclaimer { margin-top:14px; border:1px solid #d5dde5; border-radius:7px; padding:9px 11px; color:#52616b; font-size:9pt; }
+  .chart svg { width:100%; height:auto; } .signoff td { height:28px; } .disclaimer { margin-top:14px; border:1px solid #d5dde5; border-radius:7px; padding:9px 11px; color:#52616b; font-size:9pt; }
   footer { margin-top:12px; color:#6b7891; font-size:8pt; }
   h2,h3 { break-after:avoid; page-break-after:avoid; } .grid,.kv,table,tr,.charts { break-inside:avoid; page-break-inside:avoid; }
   ${approved ? '' : `.watermark { position:fixed; top:43%; left:0; right:0; color:rgba(181,71,8,.10); font-size:70pt; font-weight:800; text-align:center; transform:rotate(-24deg); }`}
 </style></head><body>
   ${approved ? '' : `<div class="watermark">${escape(study.reportStatus.toUpperCase())}</div>`}
-  <header><div class="brand">☾ POSA<small>ECG analysis</small></div><div class="status">${escape(study.reportStatus)}</div></header>
+  <header><div class="brand"><span class="brand-mark">${POSA_MARK_SVG}</span><span>POSA<small>Sleep lab</small></span></div><div class="status">${escape(study.reportStatus)}</div></header>
   <h1>ECG analysis report</h1><p class="note">Study ${escape(study.studyId || 'Unavailable')} · De-identified study record</p>
   <h2>Recording details</h2><div class="grid">
     ${cell('Study ID', study.studyId)}${cell('Recording file', study.fileName)}
@@ -102,6 +105,9 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
   </div>
   <h2>Model results</h2>${modelResults}
   <p class="note">Independent per-minute ECG model classifications at a 50% probability threshold. These are model estimates for clinician review.</p>
+  <h3>Minute-by-minute model predictions</h3>
+  <div class="chart">${recordSummary?.charts.print.modelPredictionSvg ?? '<p class="note">Minute prediction chart unavailable.</p>'}</div>
+  <p class="note">Each step represents one independently classified minute. Orange marks model-predicted apnea at the 50% threshold; these are model classifications, not scored clinical events.</p>
   <h2>ECG/model-derived estimates</h2>${modelDerivedResults}
   <p class="note">Probability-weighted scores sum the model's per-minute outputs and are not calibration-adjusted. Thresholded minutes count predictions at p ≥ 0.50; contiguous runs group adjacent positive minute windows and are not clinical event counts.</p>
   <h2>ECG-derived summary</h2>${ecgResults}
@@ -122,6 +128,7 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
 
   <section class="page-break"><h2>Clinician interpretation</h2><h3>Model findings</h3>
     <p>${completed ? `The model classified ${prediction.apnea_minutes ?? 'Unavailable'} of ${prediction.total_minutes ?? 'Unavailable'} analyzed minutes as apnea (${prediction.apnea_percent?.toFixed(1) ?? 'Unavailable'}%).` : 'No completed model result is available.'}</p>
+    <p class="note">${proxyAhi == null ? 'No model-derived AHI proxy is available.' : `Estimated AHI proxy: ${proxyAhi.toFixed(1)} events/h. Assumes one model-positive minute window equals one apnea/hypopnea event and analyzed time equals sleep time; not clinical AHI.`}</p>
     <h3>Clinician opinion</h3>${report?.clinicianOpinion.trim() ? paragraphs(report.clinicianOpinion) : '<p class="note">Not written yet.</p>'}
     <h3>Patient explanation</h3>${report?.patientExplanation.trim() ? paragraphs(report.patientExplanation) : '<p class="note">Not written yet.</p>'}
     <h2>Sign-off</h2><table class="signoff"><tbody>

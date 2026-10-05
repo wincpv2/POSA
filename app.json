@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "POSA-APP",
-    "slug": "POSA-APP",
+    "name": "POSA",
+    "slug": "posa-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -11,6 +11,7 @@
       "icon": "./assets/images/icon.png"
     },
     "android": {
+      "package": "com.posa.sleepapp",
       "adaptiveIcon": {
         "backgroundColor": "#1BA3CC",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -37,7 +38,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#04065E",
-          "image": "./assets/images/splash-icon.png",
+          "image": "./assets/images/posa-splash.png",
           "imageWidth": 200
         }
       ],

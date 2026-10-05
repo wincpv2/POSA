@@ -17,6 +17,7 @@ matplotlib.use("svg")
 import matplotlib.ticker
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_svg import FigureCanvasSVG
+from matplotlib.patches import Patch
 from io import StringIO
 import wfdb
 from wfdb import processing
@@ -433,6 +434,10 @@ app = FastAPI(title="POSA ECG Inference", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=[
+        "https://posa-sandy.vercel.app",
+        "https://posa-wincpv2s-projects.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
@@ -583,8 +588,8 @@ def get_study_summary(
             model_intervals.append({"startSeconds": start, "endSeconds": end})
     overview_intervals = apnea_intervals if apnea_available else model_intervals
     palettes = {
-        "screen": {"bg": "#12283A", "text": "#D9EAF2", "muted": "#9FB8C8", "grid": "#385367", "line": "#53D5C5", "apnea": "#F16A78", "bar": "#53D5C5"},
-        "print": {"bg": "#F7F9FB", "text": "#243743", "muted": "#52616B", "grid": "#D9E1E8", "line": "#008C95", "apnea": "#DF5363", "bar": "#198C94"},
+        "screen": {"bg": "#12283A", "text": "#D9EAF2", "muted": "#9FB8C8", "grid": "#385367", "line": "#53D5C5", "apnea": "#F16A78", "bar": "#53D5C5", "prediction": "#F4A340"},
+        "print": {"bg": "#F7F9FB", "text": "#243743", "muted": "#52616B", "grid": "#D9E1E8", "line": "#008C95", "apnea": "#DF5363", "bar": "#198C94", "prediction": "#F4A340"},
     }
 
     def svg_chart(draw: Any, palette: dict[str, str], *, figsize: tuple[float, float] = (12, 3.4)) -> str:
@@ -614,6 +619,37 @@ def get_study_summary(
             ax.set_xlabel("Recording time", fontsize=10)
             ax.grid(axis="x", color=p["grid"], linewidth=.6)
             ax.spines[["top", "right", "left"]].set_visible(False)
+
+        def model_prediction_chart(fig: Figure, ax: Any, p: dict[str, str]) -> None:
+            if not model_minutes:
+                ax.text(.5, .5, "Model predictions unavailable", ha="center", va="center", color=p["muted"], transform=ax.transAxes)
+                ax.set_axis_off()
+                return
+
+            ordered = sorted(model_minutes, key=lambda row: int(row["minute_index"]))
+            segments: list[list[dict[str, Any]]] = []
+            for row in ordered:
+                if not segments or int(row["minute_index"]) != int(segments[-1][-1]["minute_index"]) + 1:
+                    segments.append([row])
+                else:
+                    segments[-1].append(row)
+
+            for segment in segments:
+                values = [1.0 if bool(row.get("is_apnea")) else 0.0 for row in segment]
+                edges = np.array([int(row["minute_index"]) * 60.0 for row in segment] + [(int(segment[-1]["minute_index"]) + 1) * 60.0])
+                levels = np.array(values + [values[-1]])
+                ax.fill_between(edges, 0, levels, step="post", color=p["prediction"], alpha=.72, linewidth=0)
+                ax.step(edges, levels, where="post", color=p["text"], linewidth=.9)
+
+            ax.set_xlim(0, duration); ax.set_ylim(-.08, 1.08)
+            ax.set_yticks([0, 1], ["Normal", "Apnea"])
+            tick_count = min(9, max(2, int(duration // 3600) + 1))
+            tick_seconds = np.linspace(0, duration, tick_count)
+            ax.set_xticks(tick_seconds, [f"{seconds / 3600:g}" for seconds in tick_seconds])
+            ax.set_xlabel("Recording time (hours)")
+            ax.grid(axis="y", color=p["grid"], linewidth=.6, linestyle="--")
+            ax.grid(axis="x", color=p["grid"], linewidth=.5, alpha=.65)
+            ax.legend(handles=[Patch(facecolor=p["prediction"], edgecolor=p["text"], alpha=.72, label="Predicted Apnea")], loc="upper right", frameon=False, labelcolor=p["text"])
 
         def heart_rate_chart(fig: Figure, ax: Any, p: dict[str, str]) -> None:
             if not heart_rate_by_minute:
@@ -655,6 +691,7 @@ def get_study_summary(
 
         return {
             "fullNightOverviewSvg": svg_chart(night_overview, palette, figsize=(18, 1.6)),
+            "modelPredictionSvg": svg_chart(model_prediction_chart, palette, figsize=(14, 2.7)),
             "heartRateSvg": svg_chart(heart_rate_chart, palette),
             "hourlyApneaSvg": svg_chart(hourly_chart, palette, figsize=(8, 3.4)),
             "rrHistogramSvg": svg_chart(rr_chart, palette, figsize=(8, 3.4)),
