@@ -56,3 +56,6 @@ inference-server-error.log
 
 # Supabase CLI local state
 supabase/.temp/
+.vercel
+.env.local
+.env.*.local
