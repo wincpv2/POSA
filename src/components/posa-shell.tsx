@@ -1,9 +1,9 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Slot, router, usePathname } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path, Circle } from 'react-native-svg';
-import { Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 import { PosaText } from './posa-ui';
 import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
@@ -32,6 +32,33 @@ function Workspace() {
   const { study } = useUploadState();
   const { session, signOut } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [displayedLayoutTab, setDisplayedLayoutTab] = useState<string>(pathname);
+  const [shrinkingTab, setShrinkingTab] = useState<string | null>(null);
+  const activeHrefRef = useRef<string>(pathname);
+
+  useEffect(() => {
+    const prevRoute = activeHrefRef.current;
+    if (prevRoute === pathname) return;
+    activeHrefRef.current = pathname;
+
+    const hasOldTab = navItems.some((it) => it.href === prevRoute);
+    const hasNewTab = navItems.some((it) => it.href === pathname);
+
+    if (hasOldTab && hasNewTab) {
+      // Step 1: Shrink old tab indicator horizontally until gone
+      setShrinkingTab(prevRoute);
+      const timer = setTimeout(() => {
+        // Step 2: Reverse on new tab (expand horizontally from 0 to 1)
+        setShrinkingTab(null);
+        setDisplayedLayoutTab(pathname);
+      }, 150);
+      return () => clearTimeout(timer);
+    } else {
+      setShrinkingTab(null);
+      setDisplayedLayoutTab(pathname);
+    }
+  }, [pathname]);
+
   const email = session?.user?.email ?? '';
   const displayName: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
   const nextRequired = study.status === 'ready' && study.reportStatus === 'Approved' ? null
@@ -62,7 +89,9 @@ function Workspace() {
     <View pointerEvents="box-none" style={styles.dockAnchor}>
       <View accessibilityRole="list" accessibilityLabel="Main navigation" style={[styles.dock, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
         {navItems.map((item) => {
-          const active = pathname === item.href;
+          const isLayoutActive = displayedLayoutTab === item.href;
+          const isRouteActive = pathname === item.href;
+          const isShrinking = shrinkingTab === item.href;
           const blocked = (item.href === '/processing' && study.status === 'empty')
             || ((item.href === '/detail' || item.href === '/summary') && study.status !== 'ready');
           const done = item.href === '/' ? true
@@ -72,19 +101,116 @@ function Workspace() {
                 : item.href === '/summary' ? study.reportStatus === 'Approved' : false;
           const upcoming = item.href === nextRequired;
           const iconName = item.href === '/' ? 'home' : item.href.slice(1) as keyof typeof icons;
-          const label = active ? `${item.label}, current` : done ? `${item.label}, done` : upcoming ? `${item.label}, next required` : `${item.label}, upcoming`;
-          return <Link key={item.href} href={blocked ? pathname as never : item.href} asChild>
-            <Pressable accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: active, disabled: blocked }} disabled={blocked} style={StyleSheet.flatten([styles.navButton, active && styles.navActive])}>
-              <NavIcon name={iconName} color={active ? colors.accentText : colors.text} />
-              {done && !active ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
-              {active ? <PosaText style={styles.navLabel}>{item.label}</PosaText> : upcoming && !done ? <View style={styles.nextDot} /> : null}
-            </Pressable>
-          </Link>;
+          const label = isRouteActive ? `${item.label}, current` : done ? `${item.label}, done` : upcoming ? `${item.label}, next required` : `${item.label}, upcoming`;
+
+          return <DockNavItem
+            key={item.href}
+            item={item}
+            isLayoutActive={isLayoutActive}
+            isRouteActive={isRouteActive}
+            isShrinking={isShrinking}
+            blocked={blocked}
+            done={done}
+            upcoming={upcoming}
+            iconName={iconName}
+            label={label}
+            currentPathname={pathname}
+          />;
         })}
       </View>
     </View>
     {menuOpen ? <AccountMenu name={displayName} email={email} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} onOpenLog={() => { setMenuOpen(false); router.push('/activity' as never); }} /> : null}
   </View>;
+}
+
+interface DockNavItemProps {
+  item: (typeof navItems)[number];
+  isLayoutActive: boolean;
+  isRouteActive: boolean;
+  isShrinking: boolean;
+  blocked: boolean;
+  done: boolean;
+  upcoming: boolean;
+  iconName: keyof typeof icons;
+  label: string;
+  currentPathname: string;
+}
+
+function DockNavItem({
+  item,
+  isLayoutActive,
+  isRouteActive,
+  isShrinking,
+  blocked,
+  done,
+  upcoming,
+  iconName,
+  label,
+  currentPathname,
+}: DockNavItemProps) {
+  const [anim] = useState(() => new Animated.Value(isLayoutActive ? 1 : 0));
+
+  useEffect(() => {
+    if (isShrinking) {
+      Animated.timing(anim, {
+        toValue: 0,
+        duration: 150,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
+      }).start();
+    } else if (isLayoutActive) {
+      anim.setValue(0);
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 180,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
+      }).start();
+    } else {
+      anim.setValue(0);
+    }
+  }, [isShrinking, isLayoutActive, anim]);
+
+  return (
+    <Link href={blocked ? currentPathname as never : item.href} asChild>
+      <Pressable
+        accessibilityRole="link"
+        accessibilityLabel={label}
+        accessibilityState={{ selected: isRouteActive, disabled: blocked }}
+        disabled={blocked}
+        style={StyleSheet.flatten([styles.navButton, isLayoutActive && styles.navActive])}
+      >
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.indicatorContainer,
+            {
+              transform: [{ scaleX: anim }],
+              opacity: anim.interpolate({
+                inputRange: [0, 0.05, 1],
+                outputRange: [0, 1, 1],
+              }),
+            },
+          ]}
+        >
+          <View style={styles.indicatorPill} />
+          <View style={styles.indicatorBottomBar} />
+        </Animated.View>
+
+        <View style={styles.navIcon}>
+          <NavIcon name={iconName} color={isLayoutActive ? colors.accentText : colors.text} />
+        </View>
+        {done && !isLayoutActive ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
+        {isLayoutActive ? (
+          <Animated.View style={{ opacity: anim }}>
+            <PosaText style={styles.navLabel}>{item.label}</PosaText>
+          </Animated.View>
+        ) : upcoming && !done ? (
+          <View style={styles.nextDot} />
+        ) : null}
+      </Pressable>
+    </Link>
+  );
 }
 
 function AccountMenu({ name, email, onClose, onSignOut, onOpenLog }: { name: string; email: string; onClose: () => void; onSignOut: () => void; onOpenLog: () => void }) {
@@ -129,6 +255,13 @@ const styles = StyleSheet.create({
   menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' }, menuLog: { color: colors.text, fontSize: 14, fontWeight: '700' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
-  navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
-  homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
+  navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10, position: 'relative', overflow: 'hidden', cursor: 'pointer', userSelect: 'none' } as never,
+  navActive: { flex: 1.7 },
+  navIcon: { zIndex: 1, elevation: 1 },
+  navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
+  indicatorContainer: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', borderRadius: 999 },
+  indicatorPill: { ...StyleSheet.absoluteFill, borderRadius: 999, backgroundColor: colors.accent },
+  indicatorBottomBar: { position: 'absolute', bottom: 3, height: 3, width: 24, borderRadius: 1.5, backgroundColor: colors.accentText },
+  homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' },
+  nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
 });

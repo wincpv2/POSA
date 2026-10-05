@@ -5,12 +5,17 @@ import { createClient } from '@supabase/supabase-js';
 
 import type { Database } from './database.types';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() ?? '';
+const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ?? '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
+const missingSupabaseEnv = [
+  !supabaseUrl && 'EXPO_PUBLIC_SUPABASE_URL',
+  !supabaseAnonKey && 'EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+].filter(Boolean);
+
+if (missingSupabaseEnv.length > 0) {
   throw new Error(
-    'Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY — copy .env.example to .env and fill in the values from the Supabase dashboard (Project Settings > Data API).'
+    `Missing ${missingSupabaseEnv.join(' and ')}. Check the project-root .env and restart Expo with its cache cleared (npx expo start --clear).`
   );
 }
 
