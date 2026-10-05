@@ -4,7 +4,8 @@ import * as Linking from 'expo-linking';
 import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import ShareWithPatient from '@/components/share-with-patient';
 import { exportReportPdf, reportPdfBlob } from '@/components/report-export';
-import { EMPTY_RESULTS, SleepResultsPanel } from '@/components/sleep-results';
+import { NightSummaryPanel } from '@/components/night-summary';
+import { getRecordSummary, type RecordSummary } from '@/lib/inference';
 import { useAuth } from '@/lib/auth-context';
 import { EMPTY_REPORT, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listReportPdfs, listSymptomEvents, reportPdfUrl, saveReportPdf, saveStudyReportText, setStudyReportStatus, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type ReportStatus, type SavedReportPdf, type StudyReport } from '@/lib/queries';
 import { useUploadState } from '@/components/posa-state';
@@ -24,6 +25,10 @@ export default function SummaryScreen() {
   const [report, setReport] = useState<StudyReport>(EMPTY_REPORT);
   const [run, setRun] = useState<PredictionRun | null>(null);
   const [minutes, setMinutes] = useState<PredictionMinute[]>([]);
+  const [recordSummary, setRecordSummary] = useState<RecordSummary | null>(null);
+  const [summaryFetch, setSummaryFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
+  const [summaryRetry, setSummaryRetry] = useState(0);
+  const [view, setView] = useState<'Night Summary' | 'Clinical report'>('Night Summary');
   const [opinion, setOpinion] = useState('');
   const [explanation, setExplanation] = useState('');
   const [tab, setTab] = useState<'Clinician report' | 'Patient explanation'>('Clinician report');
@@ -33,6 +38,9 @@ export default function SummaryScreen() {
   const [symptomEvents, setSymptomEvents] = useState<EcgSymptomEvent[]>([]);
   const [exporting, setExporting] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const summaryKey = `${uploadId ?? ''}:${run?.id ?? ''}:${summaryRetry}`;
+  const summaryLoading = run?.status === 'completed' && summaryFetch.key !== summaryKey;
+  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : '';
 
   useEffect(() => {
     if (!uploadId) return;
@@ -48,6 +56,15 @@ export default function SummaryScreen() {
   }, [uploadId, update]);
 
   useEffect(() => {
+    if (!uploadId || run?.status !== 'completed') return;
+    let cancelled = false;
+    getRecordSummary(uploadId)
+      .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
+      .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not load the ECG night summary.') }); });
+    return () => { cancelled = true; };
+  }, [uploadId, run?.status, summaryKey]);
+
+  useEffect(() => {
     if (!uploadId) return;
     let cancelled = false;
     listSymptomEvents(uploadId)
@@ -61,6 +78,8 @@ export default function SummaryScreen() {
   const locked = status === 'Approved';
   const editable = Boolean(uploadId) && !locked && !busy;
   const completed = run?.status === 'completed';
+  const currentRecordSummary = recordSummary?.uploadId === uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
+  const estimates = currentRecordSummary?.modelMetrics;
   const dirty = opinion !== report.clinicianOpinion || explanation !== report.patientExplanation;
   const apply = (next: StudyReport) => { setReport(next); setOpinion(next.clinicianOpinion); setExplanation(next.patientExplanation); update({ reportStatus: next.status }); };
 
@@ -72,7 +91,12 @@ export default function SummaryScreen() {
     try {
       const currentEvents = uploadId ? await listSymptomEvents(uploadId) : symptomEvents;
       setSymptomEvents(currentEvents);
-      setMessage(await exportReportPdf({ study: { ...study, reportStatus: status }, generatedBy, prediction: run, report: uploadId ? signed : null, symptomEvents: currentEvents, results: EMPTY_RESULTS }));
+      let fullSummary = currentRecordSummary;
+      if (uploadId && !fullSummary) {
+        try { fullSummary = await getRecordSummary(uploadId); setRecordSummary(fullSummary); }
+        catch { /* Model output and sign-off remain exportable without ECG trend metrics. */ }
+      }
+      setMessage(await exportReportPdf({ study: { ...study, reportStatus: status }, generatedBy, prediction: run, report: uploadId ? signed : null, symptomEvents: currentEvents, recordSummary: fullSummary }));
     }
     catch (reason) { setMessage(messageOf(reason, 'Could not create the report.')); }
     finally { setExporting(false); }
@@ -101,7 +125,12 @@ export default function SummaryScreen() {
     try {
       const currentEvents = await listSymptomEvents(uploadId);
       setSymptomEvents(currentEvents);
-      const pdf = await reportPdfBlob({ study: { ...study, reportStatus: 'Approved' }, generatedBy, prediction: run, report: signed, symptomEvents: currentEvents, results: EMPTY_RESULTS });
+      let fullSummary = currentRecordSummary;
+      if (!fullSummary) {
+        try { fullSummary = await getRecordSummary(uploadId); setRecordSummary(fullSummary); }
+        catch { /* Keep the signed model report available if ECG trend analysis is offline. */ }
+      }
+      const pdf = await reportPdfBlob({ study: { ...study, reportStatus: 'Approved' }, generatedBy, prediction: run, report: signed, symptomEvents: currentEvents, recordSummary: fullSummary });
       const result = await saveReportPdf(uploadId, study.studyId, pdf, { approvedByName: signed.approvedByName, approvedAt: signed.approvedAt });
       setPdfs(await listReportPdfs(uploadId));
       setMessage(result === 'saved' ? 'Approved, signed and saved to Supabase.' : 'This approved version is already saved in Supabase. Nothing was saved again.');
@@ -128,6 +157,8 @@ export default function SummaryScreen() {
   if (study.status !== 'ready') return <View style={styles.gate}><Text style={styles.title}>No completed study summary</Text><Text style={styles.copy}>Upload a record and complete its analysis first.</Text><AppButton href="/upload"><Text style={styles.buttonText}>Go to upload</Text></AppButton></View>;
   return <ScrollView contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY SUMMARY" title="Clinical summary" description={`${study.studyId || 'Study'} · report ${status.toLowerCase()}`} />
+    <View style={styles.viewTabs}>{(['Night Summary', 'Clinical report'] as const).map((value) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: view === value }} onPress={() => setView(value)} style={[styles.viewTab, view === value && styles.viewTabActive]}><Text selectable={false} style={[styles.tabText, view === value && styles.tabTextActive]}>{value}</Text></Pressable>)}</View>
+    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => setSummaryRetry((value) => value + 1)} /> : <>
 
     <GlassPanel style={styles.panel}>
       <Text style={styles.title}>Model results</Text>
@@ -139,13 +170,25 @@ export default function SummaryScreen() {
           <Metric label="Apnea minute share" value={run.apnea_percent == null ? '—' : `${run.apnea_percent.toFixed(1)}%`} />
         </View>
         <Text style={styles.note}>Each minute is classified independently by the trained model at a 0.5 probability threshold. This is a model output and requires clinician interpretation.</Text>
-        <Text style={styles.copy}>Minute-by-minute predictions</Text>
-        <View style={styles.minutes}>{minutes.map((minute) => <View key={minute.minute_index} style={[styles.minute, minute.is_apnea && styles.apnea]}><Text style={styles.minuteText}>{minute.minute_index + 1}</Text></View>)}</View>
+        <View style={styles.grid}>
+          <Metric label="Probability-weighted minutes · Σpᵢ" value={estimates?.probabilityWeightedApneaMinutes == null ? 'Unavailable' : estimates.probabilityWeightedApneaMinutes.toFixed(1)} />
+          <Metric label="Probability-weighted burden · 100Σpᵢ/N" value={estimates?.probabilityWeightedApneaSharePercent == null ? 'Unavailable' : `${estimates.probabilityWeightedApneaSharePercent.toFixed(1)}%`} />
+          <Metric label="Predicted contiguous runs" value={estimates?.predictedRuns == null ? 'Unavailable' : String(estimates.predictedRuns)} />
+          <Metric label="Median heart rate" value={currentRecordSummary?.medianHrBpm == null ? 'Unavailable' : `${currentRecordSummary.medianHrBpm.toFixed(0)} bpm`} />
+          <Metric label="SDNN / RMSSD estimate" value={currentRecordSummary ? `${currentRecordSummary.sdnnMs == null ? 'Unavailable' : `${currentRecordSummary.sdnnMs.toFixed(0)} ms`} / ${currentRecordSummary.rmssdMs == null ? 'Unavailable' : `${currentRecordSummary.rmssdMs.toFixed(0)} ms`}` : 'Loading'} />
+          <Metric label="Valid RR intervals" value={currentRecordSummary?.validRrPercent == null ? 'Unavailable' : `${currentRecordSummary.validRrPercent.toFixed(1)}%`} />
+        </View>
+        <Text style={styles.note}>A run joins adjacent positive minute windows at the 50% threshold. Runs and model burden are not respiratory event counts or AHI. HRV is an estimate from {currentRecordSummary?.qrsAnnotationsAvailable ? 'normal-beat QRS annotations.' : 'automatically detected R-peaks.'}</Text>
       </>}
     </GlassPanel>
 
-    {/* AHI / events / ODI: "—" until the analysis provides them */}
-    <SleepResultsPanel results={EMPTY_RESULTS} audience="clinician" />
+    <GlassPanel style={styles.panel}>
+      <Text style={styles.title}>Clinical PSG / SpO₂ results</Text>
+      <View style={styles.clinicalGrid}>
+        {['AHI', 'AI', 'HI', 'Obstructive apnea count', 'Central apnea count', 'Mixed apnea count', 'Hypopnoea count', 'ODI', 'SpO₂ baseline', 'SpO₂ average', 'SpO₂ lowest'].map((label) => <View key={label} style={styles.clinicalMetric}><Text style={styles.clinicalLabel}>{label}</Text><Text style={styles.clinicalValue}>N/A</Text></View>)}
+      </View>
+      <Text style={styles.note}>The ECG upload has no airflow, respiratory effort, sleep staging, arousal, or oximetry channels. These PSG/SpO₂ results cannot be derived from model minute labels.</Text>
+    </GlassPanel>
 
     <GlassPanel style={styles.panel}>
       <View style={styles.row}><Text style={styles.title}>Report</Text><Text style={styles.status}>{status}</Text></View>
@@ -154,6 +197,8 @@ export default function SummaryScreen() {
       <View style={styles.reportBody}>{tab === 'Clinician report' ? <>
         <Text style={styles.fieldLabel}>System findings</Text>
         <Text style={styles.copy}>{completed ? `${run.apnea_minutes} apnea-classified minutes out of ${run.total_minutes} analysed minutes (${run.apnea_percent?.toFixed(1)}%).` : 'No completed model result.'}</Text>
+        <Text style={styles.fieldLabel}>Clinical sleep indices</Text>
+        <Text style={styles.copy}>AHI / AI / HI: N/A · obstructive, central, and mixed apnea: N/A · hypopnoea count: N/A · ODI and SpO₂ values: N/A. These require PSG airflow/effort channels and oximetry, which are not present in the ECG-only recording.</Text>
         <Text style={styles.fieldLabel}>Clinician opinion</Text>
         <TextInput multiline editable={editable} value={opinion} onChangeText={setOpinion} placeholder="Clinician interpretation and recommendations" placeholderTextColor={colors.muted} style={[styles.input, !editable && styles.inputLocked]} accessibilityLabel="Clinician opinion" />
       </> : <>
@@ -183,6 +228,7 @@ export default function SummaryScreen() {
     </GlassPanel>
 
     {study.patientId ? <ShareWithPatient patientId={study.patientId} /> : null}
+    </>}
   </ScrollView>;
 }
 
@@ -197,8 +243,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   metric: { flexGrow: 1, flexBasis: '22%', minWidth: 150, gap: 4, padding: 14, borderRadius: 14, backgroundColor: colors.scrim },
   value: { color: colors.text, fontWeight: '800', fontSize: 22 },
-  minutes: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  minute: { padding: 6, borderRadius: 5, backgroundColor: colors.accent }, apnea: { backgroundColor: colors.coral }, minuteText: { color: colors.accentText, fontSize: 11 },
+  clinicalGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, clinicalMetric: { flexGrow: 1, flexBasis: '15%', minWidth: 138, gap: 3, padding: 10, borderRadius: 12, backgroundColor: colors.scrim }, clinicalLabel: { color: colors.muted, fontSize: 12, fontWeight: '700' }, clinicalValue: { color: colors.text, fontSize: 16, fontWeight: '800' },
   row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 },
   status: { color: colors.text, fontSize: 14, fontWeight: '800' },
   stages: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -207,6 +252,9 @@ const styles = StyleSheet.create({
   stageDone: { backgroundColor: colors.accent, borderColor: colors.accent }, stageCurrent: { borderColor: colors.text }, stageLabelCurrent: { fontWeight: '800' },
   stageLine: { width: 32, height: 2, marginHorizontal: 4, backgroundColor: colors.border }, stageLineDone: { backgroundColor: colors.accent },
   tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, borderBottomWidth: 1, borderBottomColor: colors.border },
+  viewTabs: { flexDirection: 'row', gap: 4, borderBottomWidth: 1, borderBottomColor: colors.border },
+  viewTab: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderBottomWidth: 2, borderBottomColor: 'transparent', cursor: 'pointer', userSelect: 'none' } as never,
+  viewTabActive: { borderBottomColor: colors.accent },
   tab: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 10, borderBottomWidth: 2, borderBottomColor: 'transparent', cursor: 'pointer', userSelect: 'none' } as never,
   tabActive: { borderBottomColor: colors.accent }, tabText: { color: colors.muted, fontSize: 14, fontWeight: '700' }, tabTextActive: { color: colors.text },
   reportBody: { gap: 8, padding: 14, borderRadius: 16, backgroundColor: colors.scrim },

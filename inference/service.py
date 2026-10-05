@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
+import matplotlib
+matplotlib.use("svg")
+import matplotlib.ticker
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_svg import FigureCanvasSVG
+from io import StringIO
 import wfdb
 from wfdb import processing
 from dotenv import load_dotenv
@@ -51,7 +57,8 @@ cache_lock = threading.Lock()
 signal_cache: OrderedDict[str, tuple[np.ndarray, str, str]] = OrderedDict()
 filtered_record_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 signal_feature_cache: OrderedDict[tuple[str, int, str], tuple[np.ndarray, np.ndarray, int | None]] = OrderedDict()
-annotation_cache: dict[str, tuple[tuple[str | None, str | None], np.ndarray, list[dict[str, float]], bool, bool]] = {}
+record_summary_cache: OrderedDict[str, tuple[tuple[str | None, str | None, str | None], dict[str, Any]]] = OrderedDict()
+annotation_cache: dict[str, tuple[tuple[str | None, str | None], np.ndarray, list[dict[str, float]], bool, bool, int, int]] = {}
 CACHE_RECORDS = 2
 FEATURE_CACHE_MINUTES = 24
 
@@ -203,7 +210,7 @@ def _apnea_intervals(samples: np.ndarray, symbols: list[str], duration: float) -
 
 def _record_annotations(
     study: dict[str, Any], duration: float, filtered_record: np.ndarray
-) -> tuple[np.ndarray | None, list[dict[str, float]], bool]:
+) -> tuple[np.ndarray | None, list[dict[str, float]], bool, bool, int, int]:
     """Load optional WFDB sidecars and group apnea labels into Aom-style intervals."""
     folder, header_name = study["storage_path"].rsplit("/", 1)
     stem = Path(header_name).stem.lower()
@@ -220,7 +227,7 @@ def _record_annotations(
     with cache_lock:
         cached = annotation_cache.get(study["id"])
         if cached and cached[0] == version:
-            return cached[1] if cached[3] else None, cached[2], cached[4]
+            return cached[1] if cached[3] else None, cached[2], cached[4], cached[3], cached[5], cached[6]
         if cached:
             for key in [key for key in signal_feature_cache if key[0] == study["id"]]:
                 del signal_feature_cache[key]
@@ -228,6 +235,7 @@ def _record_annotations(
     qrs_samples = np.empty(0, dtype=np.int64)
     apnea_intervals: list[dict[str, float]] = []
     qrs_available = apnea_available = False
+    labelled_minutes = apnea_minutes = 0
     if qrs_name or apn_name:
         with tempfile.TemporaryDirectory(prefix="posa-wfdb-ann-") as temp:
             base = Path(temp) / Path(header_name).stem
@@ -247,14 +255,21 @@ def _record_annotations(
                         qrs_available = len(qrs_samples) > 0
                     else:
                         apnea_available = True
+                        labelled_minutes = len(ann.symbol)
+                        apnea_minutes = sum(symbol == "A" for symbol in ann.symbol)
                         apnea_intervals = _apnea_intervals(ann.sample, ann.symbol, duration)
                 except Exception as exc:
                     logger.warning("Ignoring invalid %s annotation for %s (%s)", extension, study["id"], type(exc).__name__)
     if qrs_available:
         qrs_samples = _refine_r_peaks(filtered_record, qrs_samples)
     with cache_lock:
-        annotation_cache[study["id"]] = (version, qrs_samples, apnea_intervals, qrs_available, apnea_available)
-    return qrs_samples if qrs_available else None, apnea_intervals, apnea_available
+        if cached and cached[0] != version:
+            record_summary_cache.pop(study["id"], None)
+        annotation_cache[study["id"]] = (
+            version, qrs_samples, apnea_intervals, qrs_available, apnea_available,
+            labelled_minutes, apnea_minutes,
+        )
+    return qrs_samples if qrs_available else None, apnea_intervals, apnea_available, qrs_available, labelled_minutes, apnea_minutes
 
 
 def _signal_features(
@@ -472,7 +487,7 @@ def get_signal_minute(
     raw_segment = signal[start:end]
     filtered_record = _filtered_record(upload_id, signal)
     duration = len(signal) / SAMPLE_RATE_HZ
-    annotated_peaks, apnea_intervals, apnea_available = _record_annotations(study, duration, filtered_record)
+    annotated_peaks, apnea_intervals, apnea_available, _, _, _ = _record_annotations(study, duration, filtered_record)
     minute_peaks = None if annotated_peaks is None else annotated_peaks[
         (annotated_peaks >= start) & (annotated_peaks < end)
     ] - start
@@ -494,3 +509,199 @@ def get_signal_minute(
         "apneaAnnotationsAvailable": apnea_available,
         "apneaIntervals": apnea_intervals,
     }
+
+
+@app.get("/v1/studies/{upload_id}/summary")
+def get_study_summary(
+    upload_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    study = _authorized_study(upload_id, token)
+    signal, lead, unit = _record_signal(study)
+    duration = len(signal) / SAMPLE_RATE_HZ
+    filtered_record = _filtered_record(upload_id, signal)
+    annotated_peaks, apnea_intervals, apnea_available, qrs_available, labelled_minutes, apnea_minutes = _record_annotations(
+        study, duration, filtered_record
+    )
+    with cache_lock:
+        annotation_version = annotation_cache[upload_id][0]
+        cached_summary = record_summary_cache.get(upload_id)
+    model_version: str | None = None
+    model_minutes: list[dict[str, Any]] = []
+    try:
+        runs = admin.table("prediction_runs").select("id,created_at,status").eq("ecg_upload_id", upload_id).eq("status", "completed").order("created_at", desc=True).limit(1).execute().data or []
+        if runs:
+            model_version = str(runs[0].get("id"))
+            model_minutes = admin.table("prediction_minutes").select("minute_index,is_apnea,apnea_probability").eq("run_id", model_version).order("minute_index").execute().data or []
+    except Exception as exc:
+        logger.info("Model timeline unavailable for %s (%s)", upload_id, type(exc).__name__)
+    cache_key = (annotation_version[0], annotation_version[1], model_version)
+    if cached_summary and cached_summary[0] == cache_key:
+        with cache_lock:
+            record_summary_cache.move_to_end(upload_id)
+        return cached_summary[1]
+
+    peaks = annotated_peaks
+    if peaks is None:
+        try:
+            peaks = np.asarray(processing.xqrs_detect(filtered_record, fs=SAMPLE_RATE_HZ, verbose=False), dtype=np.int64)
+            peaks = _refine_r_peaks(filtered_record, peaks)
+        except Exception as exc:
+            logger.info("Whole-record QRS detection unavailable for %s (%s)", upload_id, type(exc).__name__)
+            peaks = np.empty(0, dtype=np.int64)
+    heart_rate_by_minute: list[dict[str, float | int]] = []
+    for minute in range((len(signal) + WINDOW_SAMPLES - 1) // WINDOW_SAMPLES):
+        start = minute * WINDOW_SAMPLES
+        end = min(start + WINDOW_SAMPLES, len(signal))
+        minute_peaks = peaks[(peaks >= start) & (peaks < end)]
+        rr_minute = np.diff(minute_peaks).astype(np.float64) / SAMPLE_RATE_HZ
+        valid_minute = (rr_minute >= 0.3) & (rr_minute <= 2.0)
+        valid_rr = rr_minute[valid_minute]
+        if len(valid_rr):
+            heart_rate_by_minute.append({
+                "minuteIndex": minute,
+                "medianBpm": float(np.median(60.0 / valid_rr)),
+            })
+
+    rr = np.diff(peaks).astype(np.float64) / SAMPLE_RATE_HZ
+    valid_mask = (rr >= 0.3) & (rr <= 2.0)
+    valid_rr = rr[valid_mask]
+    adjacent = valid_mask[1:] & valid_mask[:-1] if len(valid_mask) > 1 else np.zeros(0, dtype=bool)
+    histogram_edges = np.linspace(0.3, 2.0, 31)
+    histogram_counts, _ = np.histogram(valid_rr, bins=histogram_edges)
+    probabilities = [float(row["apnea_probability"]) for row in model_minutes]
+    hard_positive = [bool(row.get("is_apnea")) for row in model_minutes]
+    model_positive = [int(row["minute_index"]) for row, positive in zip(model_minutes, hard_positive) if positive]
+    model_intervals: list[dict[str, float]] = []
+    for minute in model_positive:
+        start = minute * 60.0
+        end = min(duration, start + 60.0)
+        if model_intervals and start <= model_intervals[-1]["endSeconds"]:
+            model_intervals[-1]["endSeconds"] = max(model_intervals[-1]["endSeconds"], end)
+        elif end > start:
+            model_intervals.append({"startSeconds": start, "endSeconds": end})
+    overview_intervals = apnea_intervals if apnea_available else model_intervals
+    palettes = {
+        "screen": {"bg": "#12283A", "text": "#D9EAF2", "muted": "#9FB8C8", "grid": "#385367", "line": "#53D5C5", "apnea": "#F16A78", "bar": "#53D5C5"},
+        "print": {"bg": "#F7F9FB", "text": "#243743", "muted": "#52616B", "grid": "#D9E1E8", "line": "#008C95", "apnea": "#DF5363", "bar": "#198C94"},
+    }
+
+    def svg_chart(draw: Any, palette: dict[str, str], *, figsize: tuple[float, float] = (12, 3.4)) -> str:
+        fig = Figure(figsize=figsize, dpi=120, facecolor=palette["bg"])
+        FigureCanvasSVG(fig)
+        ax = fig.subplots()
+        ax.set_facecolor(palette["bg"])
+        draw(fig, ax, palette)
+        ax.tick_params(colors=palette["muted"], labelsize=10, length=3)
+        ax.xaxis.label.set_color(palette["muted"])
+        ax.yaxis.label.set_color(palette["muted"])
+        for spine in ax.spines.values():
+            spine.set_color(palette["grid"])
+        output = StringIO()
+        fig.savefig(output, format="svg", metadata={"Date": None}, facecolor=palette["bg"], bbox_inches="tight", pad_inches=.12)
+        text = output.getvalue()
+        return text[text.find("<svg"):]
+
+    def render_charts(palette: dict[str, str]) -> dict[str, str]:
+        def night_overview(fig: Figure, ax: Any, p: dict[str, str]) -> None:
+            ax.set_xlim(0, duration); ax.set_ylim(0, 1)
+            for interval in overview_intervals:
+                ax.axvspan(interval["startSeconds"], interval["endSeconds"], ymin=.25, ymax=.76, color=p["apnea"], alpha=.86)
+            ax.set_yticks([])
+            ticks = np.linspace(0, duration, min(7, max(2, int(duration / 3600) + 1)))
+            ax.set_xticks(ticks, [f"{int(x//3600):02d}:{int(x%3600//60):02d}:{int(x%60):02d}" for x in ticks])
+            ax.set_xlabel("Recording time", fontsize=10)
+            ax.grid(axis="x", color=p["grid"], linewidth=.6)
+            ax.spines[["top", "right", "left"]].set_visible(False)
+
+        def heart_rate_chart(fig: Figure, ax: Any, p: dict[str, str]) -> None:
+            if not heart_rate_by_minute:
+                ax.text(.5, .5, "No valid heart-rate points", ha="center", va="center", color=p["muted"], transform=ax.transAxes)
+            else:
+                xs = np.array([point["minuteIndex"] * 60 for point in heart_rate_by_minute])
+                ys = np.array([point["medianBpm"] for point in heart_rate_by_minute])
+                for interval in overview_intervals:
+                    ax.axvspan(interval["startSeconds"], interval["endSeconds"], color=p["apnea"], alpha=.12)
+                ax.plot(xs, ys, color=p["line"], linewidth=1.15)
+            ax.set_xlim(0, duration); ax.set_xlabel("Recording time (hours)"); ax.set_ylabel("bpm")
+            ax.xaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda x, _: f"{x/3600:g}"))
+            ax.grid(color=p["grid"], linewidth=.55)
+
+        def hourly_chart(fig: Figure, ax: Any, p: dict[str, str]) -> None:
+            if model_minutes:
+                total_hours = max(1, int(np.ceil(duration / 3600)))
+                totals = np.zeros(total_hours); positives = np.zeros(total_hours)
+                for row in model_minutes:
+                    hour = int(row["minute_index"]) // 60
+                    if hour < total_hours:
+                        totals[hour] += 1; positives[hour] += bool(row.get("is_apnea"))
+                values = np.divide(positives * 100, totals, out=np.zeros_like(totals), where=totals > 0)
+                ax.bar(np.arange(total_hours), values, color=p["apnea"], width=.72)
+            else:
+                ax.text(.5, .5, "Model minute results unavailable", ha="center", va="center", color=p["muted"], transform=ax.transAxes)
+            ax.set_ylim(0, 100); ax.set_xlabel("Recording hour"); ax.set_ylabel("Model-positive minutes (%)")
+            ax.grid(axis="y", color=p["grid"], linewidth=.55)
+
+        def rr_chart(fig: Figure, ax: Any, p: dict[str, str]) -> None:
+            ax.hist(valid_rr, bins=histogram_edges, color=p["bar"], alpha=.9)
+            if len(valid_rr):
+                ax.axvline(float(np.median(valid_rr)), color=p["apnea"], label="Median RR")
+                ax.legend(frameon=False, labelcolor=p["text"])
+            else:
+                ax.text(.5, .5, "No plausible RR intervals", ha="center", va="center", color=p["muted"], transform=ax.transAxes)
+            ax.set_xlim(.3, 2); ax.set_xlabel("RR interval (seconds)"); ax.set_ylabel("Count")
+            ax.grid(axis="y", color=p["grid"], linewidth=.55)
+
+        return {
+            "fullNightOverviewSvg": svg_chart(night_overview, palette, figsize=(18, 1.6)),
+            "heartRateSvg": svg_chart(heart_rate_chart, palette),
+            "hourlyApneaSvg": svg_chart(hourly_chart, palette, figsize=(8, 3.4)),
+            "rrHistogramSvg": svg_chart(rr_chart, palette, figsize=(8, 3.4)),
+        }
+
+    charts = {"screen": render_charts(palettes["screen"]), "print": render_charts(palettes["print"])}
+    threshold_minutes = sum(hard_positive)
+    probability_weighted_minutes = sum(probabilities)
+    runs = sum(positive and (i == 0 or model_minutes[i - 1]["minute_index"] != model_minutes[i]["minute_index"] - 1 or not hard_positive[i - 1]) for i, positive in enumerate(hard_positive))
+    model_metrics = {
+        "runId": model_version,
+        "analysedMinutes": len(model_minutes),
+        "probabilityWeightedApneaMinutes": probability_weighted_minutes if model_minutes else None,
+        "probabilityWeightedApneaSharePercent": 100 * probability_weighted_minutes / len(model_minutes) if model_minutes else None,
+        "thresholdApneaMinutes": threshold_minutes if model_minutes else None,
+        "thresholdApneaSharePercent": 100 * threshold_minutes / len(model_minutes) if model_minutes else None,
+        "predictedRuns": int(runs) if model_minutes else None,
+        "threshold": APNEA_THRESHOLD,
+    }
+    result = {
+        "uploadId": upload_id,
+        "durationSeconds": duration,
+        "samplingRateHz": SAMPLE_RATE_HZ,
+        "lead": lead,
+        "unit": unit,
+        "rPeakSource": "qrs_annotation" if qrs_available else "xqrs",
+        "qrsAnnotationsAvailable": qrs_available,
+        "apneaAnnotationsAvailable": apnea_available,
+        "labelledMinutes": labelled_minutes if apnea_available else None,
+        "apneaLabelMinutes": apnea_minutes if apnea_available else None,
+        "apneaIntervals": apnea_intervals,
+        "medianHrBpm": float(np.median(60.0 / valid_rr)) if len(valid_rr) else None,
+        "sdnnMs": float(np.std(valid_rr, ddof=1) * 1000) if len(valid_rr) >= 2 else None,
+        "rmssdMs": float(np.sqrt(np.mean(np.diff(rr)[adjacent] ** 2)) * 1000) if np.any(adjacent) else None,
+        "hrvSource": "normal_beat_qrs" if qrs_available else "automatic_xqrs_estimate",
+        "validRrPercent": float(np.mean(valid_mask) * 100) if len(valid_mask) else None,
+        "heartRateByMinute": heart_rate_by_minute,
+        "rrHistogram": {
+            "edgesSeconds": histogram_edges.tolist(),
+            "counts": histogram_counts.tolist(),
+        },
+        "charts": charts,
+        "modelMetrics": model_metrics,
+    }
+    with cache_lock:
+        record_summary_cache[upload_id] = (cache_key, result)
+        record_summary_cache.move_to_end(upload_id)
+        while len(record_summary_cache) > CACHE_RECORDS:
+            record_summary_cache.popitem(last=False)
+    return result

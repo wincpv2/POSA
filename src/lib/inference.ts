@@ -15,6 +15,41 @@ export type SignalMinute = {
   apneaIntervals: { startSeconds: number; endSeconds: number }[];
 };
 
+export type RecordSummary = {
+  uploadId: string;
+  durationSeconds: number;
+  samplingRateHz: number;
+  lead: string;
+  unit: string;
+  rPeakSource: 'qrs_annotation' | 'xqrs';
+  qrsAnnotationsAvailable: boolean;
+  apneaAnnotationsAvailable: boolean;
+  labelledMinutes: number | null;
+  apneaLabelMinutes: number | null;
+  apneaIntervals: { startSeconds: number; endSeconds: number }[];
+  medianHrBpm: number | null;
+  sdnnMs: number | null;
+  rmssdMs: number | null;
+  hrvSource: 'normal_beat_qrs' | 'automatic_xqrs_estimate';
+  validRrPercent: number | null;
+  heartRateByMinute: { minuteIndex: number; medianBpm: number }[];
+  rrHistogram: { edgesSeconds: number[]; counts: number[] };
+  charts: {
+    screen: { fullNightOverviewSvg: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
+    print: { fullNightOverviewSvg: string; heartRateSvg: string; hourlyApneaSvg: string; rrHistogramSvg: string };
+  };
+  modelMetrics: {
+    runId: string | null;
+    analysedMinutes: number;
+    probabilityWeightedApneaMinutes: number | null;
+    probabilityWeightedApneaSharePercent: number | null;
+    thresholdApneaMinutes: number | null;
+    thresholdApneaSharePercent: number | null;
+    predictedRuns: number | null;
+    threshold: number;
+  };
+};
+
 type AnalysisStart = { runId: string; status: 'queued' | 'processing' | 'completed' };
 
 function apiUrl() {
@@ -32,7 +67,13 @@ async function request(path: string, init: RequestInit = {}) {
     headers: { ...init.headers, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.detail || `Inference server returned ${response.status}.`);
+  if (!response.ok) {
+    const detail = typeof payload.detail === 'string' ? payload.detail : '';
+    if (response.status === 404 && detail === 'Not Found' && path.endsWith('/summary')) {
+      throw new Error('The local inference server is out of date. Restart it to load the recording summary endpoint.');
+    }
+    throw new Error(detail || `Inference server returned ${response.status}.`);
+  }
   return payload;
 }
 
@@ -42,4 +83,8 @@ export function startStudyAnalysis(uploadId: string) {
 
 export function getSignalMinute(uploadId: string, minute: number, mode: 'raw' | 'filtered' = 'raw') {
   return request(`/v1/studies/${encodeURIComponent(uploadId)}/signal?minute=${minute}&mode=${mode}`) as Promise<SignalMinute>;
+}
+
+export function getRecordSummary(uploadId: string) {
+  return request(`/v1/studies/${encodeURIComponent(uploadId)}/summary`) as Promise<RecordSummary>;
 }

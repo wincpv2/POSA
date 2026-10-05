@@ -2,126 +2,140 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
+import type { RecordSummary } from '@/lib/inference';
 import type { EcgSymptomEvent, PredictionRun, StudyReport } from '@/lib/queries';
 
 import type { Study } from './posa-state';
 import { FULL_DISCLAIMER } from './public-screen';
-import { EMPTY_RESULTS, formatResult, hasLeadValue, RESULT_GROUPS, rowsOf, type SleepResults } from './sleep-results-data';
 
-// Builds the printable sleep-study report and exports it as PDF / prints it.
-// - iOS / Android: expo-print renders the HTML to a real PDF file, then the
-//   share sheet lets the clinician save or send it.
-// - Web: expo-print would print the whole app page (it only calls
-//   window.print()), so the report is printed from a hidden iframe instead.
-//   Choosing "Save as PDF" in the browser's dialog produces the PDF.
-
-// report: the clinician-written part from Supabase for uploaded studies.
-// results: AHI / events / ODI (sleep-results-data.ts); "—" until provided.
-export type ReportOptions = { study: Study; generatedBy: string; prediction: PredictionRun | null; report?: StudyReport | null; symptomEvents?: EcgSymptomEvent[]; results?: SleepResults };
+export type ReportOptions = {
+  study: Study;
+  generatedBy: string;
+  prediction: PredictionRun | null;
+  report?: StudyReport | null;
+  symptomEvents?: EcgSymptomEvent[];
+  recordSummary?: RecordSummary | null;
+};
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c);
-const row = (label: string, value: string | null | undefined) => `<tr><th>${escape(label)}</th><td>${escape(value && value.trim() ? value : '—')}</td></tr>`;
-const cell = (label: string, value: string | null | undefined) => `<div class="kv"><span>${escape(label)}</span><b>${escape(value && value.trim() ? value : '—')}</b></div>`;
-
+const safe = (value: number | null | undefined, fallback = 0) => value != null && Number.isFinite(value) ? value : fallback;
+const cell = (label: string, value: string | number | null | undefined) => `<div class="kv"><span>${escape(label)}</span><b>${value == null || value === '' ? 'Unavailable' : escape(String(value))}</b></div>`;
 const paragraphs = (text: string) => text.split(/\n{2,}/).map((p) => `<p>${escape(p).replace(/\n/g, '<br />')}</p>`).join('');
-const signed = (name: string | null | undefined, at: string | null | undefined) => name && at ? `${escape(name)} · ${escape(new Date(at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}` : '';
+const signed = (name: string | null | undefined, at: string | null | undefined) => name && at ? `${escape(name)} · ${escape(new Date(at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }))}` : 'Unavailable';
+const timeLabel = (seconds: number) => {
+  const value = Math.max(0, Math.floor(safe(seconds)));
+  return `${String(Math.floor(value / 3600)).padStart(2, '0')}:${String(Math.floor(value / 60) % 60).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+};
 
-export function reportHtml({ study, generatedBy, prediction, report, symptomEvents = [], results: indexValues = EMPTY_RESULTS }: ReportOptions): string {
+export function reportHtml({ study, generatedBy, prediction, report, symptomEvents = [], recordSummary = null }: ReportOptions): string {
   const approved = study.reportStatus === 'Approved';
   const generatedAt = new Date().toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
   const completed = prediction?.status === 'completed';
-  const results = completed
-    ? `<div class="grid">${cell('Analysed minutes', String(prediction.total_minutes ?? '—'))}${cell('Apnea-classified minutes', String(prediction.apnea_minutes ?? '—'))}${cell('Apnea minute share', prediction.apnea_percent == null ? '—' : `${prediction.apnea_percent.toFixed(1)}%`)}</div><p class="note">Per-minute model classification at a 0.5 probability threshold. Clinician interpretation is required.</p>`
-    : `<p>No completed model analysis is available.</p>`;
-  // AHI / Events Breakdown / ODI in the same 2-column label / value cells; English only.
-  const indicesMissing = Object.values(indexValues).every((v) => v === null);
-  const indices = RESULT_GROUPS.map((g) => `<h3>${escape(g.title)}</h3>
-    <div class="grid">
-      ${hasLeadValue(g) ? cell(g.leadLabel, formatResult(indexValues[g.lead], g.leadUnit)) : ''}
-      ${rowsOf(g).map((r) => cell(r.label, formatResult(indexValues[r.key], r.unit))).join('')}
-    </div>`).join('')
-    + (indicesMissing ? '<p class="note">— = not available yet. Values appear once the analysis provides them; ODI and SpO₂ also need a pulse-oximetry signal.</p>' : '');
+  const labelledMinutes = recordSummary?.labelledMinutes;
+  const apneaLabelMinutes = recordSummary?.apneaLabelMinutes;
+  const annotationShare = labelledMinutes && apneaLabelMinutes != null ? `${(apneaLabelMinutes * 100 / labelledMinutes).toFixed(1)}%` : 'Unavailable';
+  const recordingSeconds = safe(recordSummary?.durationSeconds) || safe(study.durationSeconds) || safe(prediction?.total_minutes) * 60;
+  const modelResults = completed
+    ? `<div class="grid">${cell('Analyzed minutes', prediction.total_minutes)}${cell('Model apnea-classified minutes', prediction.apnea_minutes)}${cell('Model apnea minute share', prediction.apnea_percent == null ? null : `${prediction.apnea_percent.toFixed(1)}%`)}${cell('Probability threshold', '50%')}${cell('Model ID', prediction.model_id)}</div>`
+    : '<p>No completed model analysis is available.</p>';
+  const modelMetrics = recordSummary?.modelMetrics;
+  const ecgResults = `<div class="grid">
+    ${cell('A-labeled minutes', recordSummary?.apneaAnnotationsAvailable ? apneaLabelMinutes : null)}
+    ${cell('Labeled minutes', recordSummary?.apneaAnnotationsAvailable ? labelledMinutes : null)}
+    ${cell('A-label share', recordSummary?.apneaAnnotationsAvailable ? annotationShare : null)}
+    ${cell('Contiguous annotation runs', recordSummary?.apneaAnnotationsAvailable ? recordSummary.apneaIntervals.length : null)}
+    ${cell('Median heart rate', recordSummary?.medianHrBpm == null ? null : `${recordSummary.medianHrBpm.toFixed(0)} bpm`)}
+    ${cell('SDNN estimate', recordSummary?.sdnnMs == null ? null : `${recordSummary.sdnnMs.toFixed(0)} ms`)}
+    ${cell('RMSSD estimate', recordSummary?.rmssdMs == null ? null : `${recordSummary.rmssdMs.toFixed(0)} ms`)}
+    ${cell('Valid RR intervals', recordSummary?.validRrPercent == null ? null : `${recordSummary.validRrPercent.toFixed(1)}%`)}
+    ${cell('R-peak source', recordSummary?.qrsAnnotationsAvailable ? 'Normal-beat QRS annotations' : recordSummary ? 'Automatic XQRS estimates' : null)}
+  </div>`;
+  const modelDerivedResults = `<div class="grid">
+    ${cell('Probability-weighted minute score (Σpᵢ)', modelMetrics?.probabilityWeightedApneaMinutes == null ? null : modelMetrics.probabilityWeightedApneaMinutes.toFixed(1))}
+    ${cell('Probability-weighted burden (100 × Σpᵢ / N)', modelMetrics?.probabilityWeightedApneaSharePercent == null ? null : `${modelMetrics.probabilityWeightedApneaSharePercent.toFixed(1)}%`)}
+    ${cell('Threshold positive minutes (p ≥ 0.50)', modelMetrics?.thresholdApneaMinutes)}
+    ${cell('Threshold positive-minute share', modelMetrics?.thresholdApneaSharePercent == null ? null : `${modelMetrics.thresholdApneaSharePercent.toFixed(1)}%`)}
+    ${cell('Contiguous model-predicted runs', modelMetrics?.predictedRuns)}
+    ${cell('Probability threshold', modelMetrics?.threshold == null ? null : `${(modelMetrics.threshold * 100).toFixed(0)}%`)}
+  </div>`;
+  const clinicalResults = `<div class="grid">
+    ${cell('AHI (Apnea-Hypopnea Index)', 'N/A · requires PSG and sleep time')}${cell('AI (Apnea Index)', 'N/A · requires scored respiratory events')}
+    ${cell('HI (Hypopnea Index)', 'N/A · requires airflow, desaturation/arousal scoring')}${cell('Obstructive apnea count', 'N/A · requires airflow and effort channels')}
+    ${cell('Central apnea count', 'N/A · requires airflow and effort channels')}${cell('Mixed apnea count', 'N/A · requires airflow and effort channels')}
+    ${cell('Hypopnoea count', 'N/A · requires PSG scoring')}${cell('ODI', 'N/A · requires SpO₂ oximetry')}
+    ${cell('SpO₂ baseline', 'N/A · requires SpO₂ oximetry')}${cell('SpO₂ average', 'N/A · requires SpO₂ oximetry')}${cell('SpO₂ lowest', 'N/A · requires SpO₂ oximetry')}
+  </div>`;
   const symptoms = symptomEvents.length
-    ? `<ul>${symptomEvents.map((event) => {
-      const seconds = Math.max(0, Math.floor(event.occurred_at_seconds));
-      const time = `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
-      return `<li><b>${time}</b> · ${event.symptoms.map(escape).join(', ')}</li>`;
-    }).join('')}</ul>`
-    : '<p class="note">No symptoms recorded.</p>';
+    ? `<table><thead><tr><th>Recording time</th><th>Symptoms</th></tr></thead><tbody>${symptomEvents.map((event) => `<tr><td>${timeLabel(event.occurred_at_seconds)}</td><td>${event.symptoms.map(escape).join(', ')}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="note">No symptoms were recorded.</p>';
 
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8" /><title>POSA report ${escape(study.studyId || '')}</title>
+<html lang="en"><head><meta charset="utf-8"/><title>POSA ECG report ${escape(study.studyId)}</title>
 <style>
   @page { size: A4; margin: 14mm 16mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'Sarabun', 'Noto Sans Thai', 'Leelawadee UI', Tahoma, sans-serif; color: #10203a; font-size: 11pt; line-height: 1.45; margin: 0; }
-  header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #04065E; padding-bottom: 6px; margin-bottom: 12px; }
-  .brand { font-size: 20pt; font-weight: 800; color: #04065E; }
-  .brand small { font-size: 11pt; font-weight: 600; color: #0077B6; margin-left: 6px; }
-  .status { font-weight: 800; padding: 4px 12px; border-radius: 999px; border: 2px solid ${approved ? '#0b7a55' : '#b54708'}; color: ${approved ? '#0b7a55' : '#b54708'}; }
-  h1 { font-size: 16pt; margin: 0 0 4px; } h2 { font-size: 12.5pt; margin: 14px 0 6px; color: #04065E; }
-  table { width: 100%; border-collapse: collapse; } th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #d5dde8; vertical-align: top; }
-  th { width: 38%; color: #44526b; font-weight: 600; }
-  p { margin: 0 0 6px; }
-  .note { color: #44526b; font-size: 10pt; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }
-  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px solid #d5dde8; }
-  .kv span { color: #44526b; } .kv b { text-align: right; }
-  h3 { font-size: 10.5pt; margin: 10px 0 2px; color: #0077B6; }
-  h2, h3 { break-after: avoid; page-break-after: avoid; }
-  .grid, .signoff, .disclaimer, .kv, tr { break-inside: avoid; page-break-inside: avoid; }
-  .signoff td { height: 30px; }
-  .disclaimer { margin-top: 16px; padding: 10px 12px; border: 1px solid #d5dde8; border-radius: 8px; font-size: 10.5pt; color: #44526b; }
-  footer { margin-top: 10px; font-size: 9.5pt; color: #6b7891; }
-  ${approved ? '' : `.watermark { position: fixed; top: 40%; left: 0; right: 0; text-align: center; font-size: 72pt; font-weight: 800; color: rgba(181,71,8,0.10); transform: rotate(-24deg); pointer-events: none; }`}
-</style></head>
-<body>
+  body { font-family: 'Nunito', 'Arial', sans-serif; color: #10203a; font-size: 10.5pt; line-height: 1.42; margin: 0; }
+  header { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #04065e; padding-bottom:7px; margin-bottom:14px; }
+  .brand { color:#04065e; font-size:21pt; font-weight:800; } .brand small { color:#0077b6; font-size:10pt; margin-left:7px; }
+  .status { border:2px solid ${approved ? '#0b7a55' : '#b54708'}; border-radius:99px; padding:3px 11px; color:${approved ? '#0b7a55' : '#b54708'}; font-weight:800; }
+  h1 { font-size:18pt; margin:0 0 4px; } h2 { margin:14px 0 6px; padding:5px 8px; background:#34404a; color:#fff; font-size:12pt; font-weight:700; }
+  h3 { color:#0077b6; font-size:10pt; margin:10px 0 4px; } p { margin:0 0 7px; }
+  .note { color:#52616b; font-size:9pt; } .grid { display:grid; grid-template-columns:1fr 1fr; column-gap:24px; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:5px 2px; border-bottom:1px solid #d5dde5; }
+  .kv span { color:#52616b; } .kv b { text-align:right; }
+  table { width:100%; border-collapse:collapse; } th,td { padding:5px 7px; text-align:left; border-bottom:1px solid #d5dde5; } th { color:#52616b; font-weight:600; }
+  .page-break { break-before:page; page-break-before:always; } .chart { width:100%; display:block; margin:5px 0 12px; }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:10px; } .charts svg { width:100%; height:auto; }
+  .signoff td { height:28px; } .disclaimer { margin-top:14px; border:1px solid #d5dde5; border-radius:7px; padding:9px 11px; color:#52616b; font-size:9pt; }
+  footer { margin-top:12px; color:#6b7891; font-size:8pt; }
+  h2,h3 { break-after:avoid; page-break-after:avoid; } .grid,.kv,table,tr,.charts { break-inside:avoid; page-break-inside:avoid; }
+  ${approved ? '' : `.watermark { position:fixed; top:43%; left:0; right:0; color:rgba(181,71,8,.10); font-size:70pt; font-weight:800; text-align:center; transform:rotate(-24deg); }`}
+</style></head><body>
   ${approved ? '' : `<div class="watermark">${escape(study.reportStatus.toUpperCase())}</div>`}
-  <header><div class="brand">☾ POSA<small>Sleep lab</small></div><div class="status">${escape(study.reportStatus)}</div></header>
-  <h1>Sleep study report</h1>
-  <p class="note">Study ${escape(study.studyId || '—')} · De-identified: no patient name is stored in POSA.</p>
-
-  <h2>Study</h2>
-  <div class="grid">
-    ${cell('Study ID', study.studyId)}
-    ${cell('Recording file', study.fileName)}
-    ${cell('Sampling rate', study.sampleRate ? `${study.sampleRate} Hz` : null)}
-    ${cell('Lead', study.lead)}
-    ${cell('Age', study.age ? `${study.age} years` : null)}
-    ${cell('Sex', study.sex)}
-    ${cell('BMI', study.bmi)}
+  <header><div class="brand">☾ POSA<small>ECG analysis</small></div><div class="status">${escape(study.reportStatus)}</div></header>
+  <h1>ECG analysis report</h1><p class="note">Study ${escape(study.studyId || 'Unavailable')} · De-identified study record</p>
+  <h2>Recording details</h2><div class="grid">
+    ${cell('Study ID', study.studyId)}${cell('Recording file', study.fileName)}
+    ${cell('Recording duration', recordingSeconds > 0 ? `${Math.floor(recordingSeconds / 3600)} h ${String(Math.floor(recordingSeconds / 60) % 60).padStart(2, '0')} m` : null)}
+    ${cell('Sampling rate', study.sampleRate ? `${study.sampleRate} Hz` : null)}${cell('ECG lead', study.lead)}
+    ${cell('Age', study.age ? `${study.age} years` : null)}${cell('Sex', study.sex)}${cell('BMI', study.bmi)}
   </div>
+  <h2>Model results</h2>${modelResults}
+  <p class="note">Independent per-minute ECG model classifications at a 50% probability threshold. These are model estimates for clinician review.</p>
+  <h2>ECG/model-derived estimates</h2>${modelDerivedResults}
+  <p class="note">Probability-weighted scores sum the model's per-minute outputs and are not calibration-adjusted. Thresholded minutes count predictions at p ≥ 0.50; contiguous runs group adjacent positive minute windows and are not clinical event counts.</p>
+  <h2>ECG-derived summary</h2>${ecgResults}
+  <h2>Clinical sleep study results</h2>${clinicalResults}<p class="note">This upload contains ECG only. ECG model labels and WFDB A-labels cannot determine these PSG and oxygen measurements.</p>
+  <p class="note">SDNN/RMSSD ${recordSummary?.qrsAnnotationsAvailable ? 'use normal-beat QRS annotations.' : 'are estimates from automatically detected R-peaks.'} Valid RR percentage uses intervals from 0.3 to 2.0 seconds.</p>
+  <div class="disclaimer">${escape(FULL_DISCLAIMER)} Model minute labels and WFDB A-label runs are separate outputs; neither is a clinical apnea event count or AHI.</div>
 
-  <h2>Results</h2>
-  ${results}
-  ${indices}
+  <section class="page-break"><h2>Night trends</h2><h3>Full-night apnea overview</h3>
+    ${recordSummary?.charts.print.fullNightOverviewSvg ? `<div class="chart">${recordSummary.charts.print.fullNightOverviewSvg}</div>` : ''}
+    <h3>Minute median heart rate</h3>
+    <div class="chart">${recordSummary?.charts.print.heartRateSvg ?? '<p>Heart-rate chart unavailable.</p>'}</div>
+    <p class="note">Light red = model apnea-classified minutes; dark red = WFDB A-label runs${recordSummary?.apneaAnnotationsAvailable ? '' : ' (no WFDB A-label file available)'}.</p>
+    <div class="charts"><div><h3>Hourly model apnea burden</h3>${recordSummary?.charts.print.hourlyApneaSvg ?? '<p>Hourly model chart unavailable.</p>'}<p class="note">Model apnea-classified minutes / analyzed minutes in each recording hour.</p></div>
+      <div><h3>Plausible RR-interval distribution</h3>${recordSummary?.charts.print.rrHistogramSvg ?? '<p>RR interval chart unavailable.</p>'}<p class="note">RR intervals from 0.3 to 2.0 seconds; R peaks: ${recordSummary?.qrsAnnotationsAvailable ? 'normal-beat QRS annotations' : 'automatic XQRS estimates'}.</p></div>
+    </div>
+    <h2>Symptoms recorded during playback</h2>${symptoms}
+  </section>
 
-  <h2>Symptoms recorded during playback</h2>
-  ${symptoms}
-
-  <h2>Clinician report</h2>
-  <p class="note">System findings</p>
-  <p>${completed ? `The model classified ${prediction.apnea_minutes ?? '—'} of ${prediction.total_minutes ?? '—'} analysed minutes as apnea (${prediction.apnea_percent?.toFixed(1) ?? '—'}%).` : 'No completed model result is available.'}</p>
-  <p class="note">Clinician opinion</p>
-  ${report?.clinicianOpinion.trim() ? paragraphs(report.clinicianOpinion) : '<p class="note">Not written yet.</p>'}
-
-  <h2>Patient explanation</h2>
-  ${report?.patientExplanation.trim() ? paragraphs(report.patientExplanation) : '<p class="note">Not written yet.</p>'}
-
-  <h2>Sign-off</h2>
-  <table class="signoff">
-    ${row('Report status', study.reportStatus)}
-    <tr><th>Reviewed by</th><td>${signed(report?.reviewedByName, report?.reviewedAt)}</td></tr>
-    <tr><th>Approved and electronically signed by</th><td>${signed(report?.approvedByName, report?.approvedAt)}</td></tr>
-    <tr><th>Signature</th><td></td></tr>
-  </table>
-
-  <div class="disclaimer">${escape(FULL_DISCLAIMER)}</div>
+  <section class="page-break"><h2>Clinician interpretation</h2><h3>Model findings</h3>
+    <p>${completed ? `The model classified ${prediction.apnea_minutes ?? 'Unavailable'} of ${prediction.total_minutes ?? 'Unavailable'} analyzed minutes as apnea (${prediction.apnea_percent?.toFixed(1) ?? 'Unavailable'}%).` : 'No completed model result is available.'}</p>
+    <h3>Clinician opinion</h3>${report?.clinicianOpinion.trim() ? paragraphs(report.clinicianOpinion) : '<p class="note">Not written yet.</p>'}
+    <h3>Patient explanation</h3>${report?.patientExplanation.trim() ? paragraphs(report.patientExplanation) : '<p class="note">Not written yet.</p>'}
+    <h2>Sign-off</h2><table class="signoff"><tbody>
+      <tr><th>Report status</th><td>${escape(study.reportStatus)}</td></tr>
+      <tr><th>Reviewed by</th><td>${signed(report?.reviewedByName, report?.reviewedAt)}</td></tr>
+      <tr><th>Approved and electronically signed by</th><td>${signed(report?.approvedByName, report?.approvedAt)}</td></tr>
+      <tr><th>Signature</th><td></td></tr>
+    </tbody></table>
+    <div class="disclaimer">${escape(FULL_DISCLAIMER)}</div>
+  </section>
   <footer>Generated by ${escape(generatedBy)} on ${escape(generatedAt)} · POSA</footer>
 </body></html>`;
 }
 
-// Web: print only the report, from a hidden iframe.
 function printHtmlOnWeb(html: string) {
   const frame = document.createElement('iframe');
   frame.setAttribute('aria-hidden', 'true');
@@ -136,7 +150,6 @@ function printHtmlOnWeb(html: string) {
   setTimeout(() => { win.focus(); win.print(); }, 250);
 }
 
-// Returns a note for the UI about what happened.
 export async function exportReportPdf(options: ReportOptions): Promise<string> {
   const html = reportHtml(options);
   if (Platform.OS === 'web') {
@@ -151,10 +164,6 @@ export async function exportReportPdf(options: ReportOptions): Promise<string> {
   return `PDF saved to ${uri}`;
 }
 
-// The PDF as a file the app can upload (Supabase keeps approved reports).
-// - iOS / Android: expo-print's real PDF.
-// - Web: html2pdf.js renders the report to an A4 PDF in the page (an image-
-//   based PDF: Thai text always looks right, but it is not selectable).
 export async function reportPdfBlob(options: ReportOptions): Promise<Blob> {
   const html = reportHtml(options);
   if (Platform.OS !== 'web') {
@@ -165,13 +174,10 @@ export async function reportPdfBlob(options: ReportOptions): Promise<Blob> {
   const parsed = new DOMParser().parseFromString(html, 'text/html');
   const host = document.createElement('div');
   Object.assign(host.style, { position: 'fixed', left: '-10000px', top: '0', width: '178mm', background: '#ffffff' });
-  host.innerHTML = Array.from(parsed.head.querySelectorAll('style')).map((s) => s.outerHTML).join('') + parsed.body.innerHTML;
+  host.innerHTML = Array.from(parsed.head.querySelectorAll('style')).map((style) => style.outerHTML).join('') + parsed.body.innerHTML;
   document.body.appendChild(host);
   try {
-    return await html2pdf()
-      .set({ margin: [14, 16, 14, 16], image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'legacy'], avoid: ['.grid', '.signoff', '.disclaimer', '.kv', 'tr', 'h2', 'h3'] } } as never)
-      .from(host)
-      .outputPdf('blob');
+    return await html2pdf().set({ margin: [14, 16, 14, 16], image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, backgroundColor: '#ffffff' }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'legacy'], avoid: ['.grid', '.signoff', '.disclaimer', '.kv', 'tr', 'h2', 'h3'] } } as never).from(host).outputPdf('blob');
   } finally {
     host.remove();
   }

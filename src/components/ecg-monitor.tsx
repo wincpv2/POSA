@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { Gesture, GestureDetector, type GestureStateChangeEvent, type PanGestureHandlerEventPayload, type PinchGestureHandlerEventPayload } from 'react-native-gesture-handler';
-import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Rect, SvgXml, Text as SvgText } from 'react-native-svg';
 import { AppButton, PosaText as Text, pressX } from '@/components/posa-ui';
 import type { SignalMinute } from '@/lib/inference';
-import type { EcgSymptomEvent, PredictionMinute } from '@/lib/queries';
+import type { EcgSymptomEvent } from '@/lib/queries';
 
 const VIEW_WINDOWS = [2.5, 5, 10, 20, 40, 80];
 const plot = { left: 48, right: 990, top: 20, bottom: 290 };
@@ -22,6 +22,8 @@ type WaveformProps = {
   signal: SignalMinute | null;
   signalPending: boolean;
   signalError: string;
+  chartHeight?: number;
+  chartFlex?: boolean;
   onRetry: () => void;
   currentMinute: number;
   currentSecond: number;
@@ -105,14 +107,14 @@ export function EcgWaveform(props: WaveformProps) {
       else indices.push(...(minimumIndex < maximumIndex ? [minimumIndex, maximumIndex] : [maximumIndex, minimumIndex]));
     }
     if (!indices.length) return null;
-    let low = Infinity;
-    let high = -Infinity;
-    for (const index of indices) {
-      low = Math.min(low, signal.samples[index]);
-      high = Math.max(high, signal.samples[index]);
-    }
+    const envelope = indices.map((index) => signal.samples[index]).sort((a, b) => a - b);
+    let low = envelope[Math.floor((envelope.length - 1) * 0.002)];
+    let high = envelope[Math.ceil((envelope.length - 1) * 0.998)];
     if (!finite(low) || !finite(high)) return null;
     const amplitude = Math.max(high - low, 1e-6);
+    low -= amplitude * 0.08;
+    high += amplitude * 0.08;
+    const displayRange = high - low;
     const plotStart = Math.min(start, Math.max(0, duration - span));
     const plotSpan = Math.max(0.001, Math.min(span, duration - plotStart));
     const majorStep = viewSeconds <= 2.5 ? 0.5 : viewSeconds <= 5 ? 1 : viewSeconds <= 10 ? 2 : viewSeconds <= 20 ? 5 : viewSeconds <= 40 ? 10 : 20;
@@ -125,7 +127,7 @@ export function EcgWaveform(props: WaveformProps) {
       xGrid.push({ x: plot.left + (tick - plotStart) / plotSpan * (plot.right - plot.left), major });
       tick += minorStep;
     }
-    const y = (value: number) => plot.bottom - (value - low) / amplitude * (plot.bottom - plot.top);
+    const y = (value: number) => clamp(plot.bottom - (value - low) / displayRange * (plot.bottom - plot.top), plot.top, plot.bottom);
     const path = indices.map((index, offset) => {
       const x = plot.left + clamp((index / rate - plotStart) / plotSpan, 0, 1) * (plot.right - plot.left);
       return `${offset ? 'L' : 'M'}${x.toFixed(1)} ${y(signal.samples[index]).toFixed(1)}`;
@@ -163,6 +165,8 @@ export function EcgWaveform(props: WaveformProps) {
     return {
       path,
       xGrid,
+      low,
+      high,
       peaks,
       apneaSpans,
       cursor,
@@ -252,10 +256,10 @@ export function EcgWaveform(props: WaveformProps) {
     };
     const onWheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
+      event.preventDefault();
       const direction = event.deltaY < 0 ? -1 : 1;
       const index = VIEW_WINDOWS.indexOf(viewSecondsRef.current);
       if ((direction < 0 && index === 0) || (direction > 0 && index === VIEW_WINDOWS.length - 1)) return;
-      event.preventDefault();
       const location = point(event as unknown as PointerEvent);
       const ratio = (location.x / Math.max(1, location.width) * 1000 - plot.left) / (plot.right - plot.left);
       interactionRef.current?.zoomAt(direction, ratio);
@@ -369,22 +373,24 @@ export function EcgWaveform(props: WaveformProps) {
   const chart = <View
     ref={chartRef}
     onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
-    style={styles.chart}
+    style={[styles.chart, props.chartFlex ? styles.chartFlex : styles.chartFixed, props.chartHeight ? { height: props.chartHeight, minHeight: 150 } : null]}
     accessibilityRole="image"
     accessibilityLabel={`ECG waveform for minute ${currentMinute + 1}. Scroll to zoom, drag horizontally to pan, tap near an R peak to inspect it.`}
   >
     {plotted ? <Svg width="100%" height="100%" viewBox="0 0 1000 320" preserveAspectRatio="none">
-      <Rect width="1000" height="320" fill="#071419" />
-      {apnea ? <Rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={plot.bottom - plot.top} fill="#D84352" opacity={0.07} /> : null}
-      {Array.from({ length: 14 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * (plot.bottom - plot.top) / 13} y2={plot.top + index * (plot.bottom - plot.top) / 13} stroke={index % 4 === 0 ? '#29454B' : '#173038'} strokeWidth={index % 4 === 0 ? 1 : 0.6} />)}
-      {plotted.xGrid.map((line, index) => <Line key={`v${index}`} x1={line.x} x2={line.x} y1={plot.top} y2={plot.bottom} stroke={line.major ? '#29454B' : '#173038'} strokeWidth={line.major ? 1 : 0.6} />)}
-      {plotted.apneaSpans.map((span, index) => <Rect key={`apnea${index}`} x={span.x} y={plot.top} width={Math.max(1, span.width)} height={plot.bottom - plot.top} fill="#D84352" opacity={0.24} />)}
-      {plotted.symptomMarkers.map((x, index) => <Line key={`s${index}`} x1={x} x2={x} y1={plot.top} y2={plot.bottom} stroke="#FFD166" strokeDasharray="4 4" strokeWidth={1.5} />)}
-      <Path d={plotted.path} fill="none" stroke="#49E3A0" strokeWidth={1.8} />
-      {plotted.peaks.map((peak) => <Circle key={`r${peak.index}`} cx={peak.x} cy={peak.y} r={peak.selected ? 6 : peak.neighbor ? 4.5 : 3.5} fill={peak.neighbor ? '#071419' : '#FFD166'} stroke={peak.neighbor ? '#6EE7E7' : '#071419'} strokeWidth={peak.selected || peak.neighbor ? 1.5 : 1} />)}
+      <Rect width="1000" height="320" fill="#102333" />
+      {Array.from({ length: 16 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * (plot.bottom - plot.top) / 15} y2={plot.top + index * (plot.bottom - plot.top) / 15} stroke={index % 5 === 0 ? '#3B5668' : '#263D4D'} strokeWidth={index % 5 === 0 ? 1.2 : 0.75} />)}
+      {plotted.xGrid.map((line, index) => <Line key={`v${index}`} x1={line.x} x2={line.x} y1={plot.top} y2={plot.bottom} stroke={line.major ? '#3B5668' : '#263D4D'} strokeWidth={line.major ? 1.2 : 0.75} />)}
+      {apnea ? <Rect x={plot.left} y={plot.top} width={plot.right - plot.left} height={6} fill="#F16A78" opacity={0.9} /> : null}
+      {plotted.apneaSpans.map((span, index) => <Rect key={`apnea${index}`} x={span.x} y={plot.top + 6} width={Math.max(1, span.width)} height={5} fill="#F16A78" opacity={0.9} />)}
+      {plotted.symptomMarkers.map((x, index) => <Line key={`s${index}`} x1={x} x2={x} y1={plot.top} y2={plot.bottom} stroke="#FFC857" strokeDasharray="4 4" strokeWidth={1.5} />)}
+      <Path d={plotted.path} fill="none" stroke="#53D5C5" strokeWidth={2.3} />
+      {plotted.peaks.map((peak) => <Circle key={`r${peak.index}`} cx={peak.x} cy={peak.y} r={peak.selected ? 6 : peak.neighbor ? 4.5 : 3.5} fill={peak.neighbor ? '#102333' : '#FFC857'} stroke={peak.neighbor ? '#53D5C5' : '#102333'} strokeWidth={peak.selected || peak.neighbor ? 1.5 : 1} />)}
       {plotted.cursor == null ? null : <Line x1={plotted.cursor} x2={plotted.cursor} y1={plot.top} y2={plot.bottom} stroke="#E8F3F2" strokeWidth={1} opacity={0.85} />}
-      <SvgText x={plot.left} y={312} fill="#A9C3C5" fontSize="12">{timeLabel(plotted.start)}</SvgText>
-      <SvgText x={plot.right} y={312} fill="#A9C3C5" fontSize="12" textAnchor="end">{timeLabel(plotted.end)}</SvgText>
+      <SvgText x={plot.left} y={312} fill="#B5CAD6" fontSize="12">{timeLabel(plotted.start)}</SvgText>
+      <SvgText x={plot.right} y={312} fill="#B5CAD6" fontSize="12" textAnchor="end">{timeLabel(plotted.end)}</SvgText>
+      <SvgText x={5} y={plot.top + 5} fill="#B5CAD6" fontSize="11">{plotted.high.toFixed(2)} {signal?.unit || 'relative'}</SvgText>
+      <SvgText x={5} y={plot.bottom} fill="#B5CAD6" fontSize="11">{plotted.low.toFixed(2)} {signal?.unit || 'relative'}</SvgText>
     </Svg> : signalPending ? <ActivityIndicator color="#49E3A0" /> : <View style={styles.chartError}>
       <Text style={styles.chartMessage}>{signalError || 'No ECG samples available for this time.'}</Text>
       {signalError ? <AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.link}>Retry signal</Text></AppButton> : null}
@@ -398,69 +404,50 @@ export function EcgWaveform(props: WaveformProps) {
         if (x != null) seekAtRatio(x / Math.max(1, chartWidth));
       }}>{chart}</Pressable>
     </GestureDetector>}
-    <Text style={styles.chartHint}>{Platform.OS === 'web' ? 'Mouse wheel: zoom at pointer · drag to pan · click near an R peak to inspect' : 'Drag horizontally to pan · pinch to zoom · tap near an R peak to inspect'} · {signal?.rPeakSource === 'qrs_annotation' ? 'WFDB QRS annotations refined to ECG peaks' : 'automatic XQRS detections refined to ECG peaks'}</Text>
   </>;
 }
 
 type OverviewProps = {
   duration: number;
   playheadSec: number;
-  currentMinute: number;
   viewStartSec: number;
   viewSeconds: number;
-  minutes: PredictionMinute[];
-  predictedIntervals: Interval[];
-  annotationIntervals: Interval[];
-  annotationsAvailable: boolean;
+  timelineHeight?: number;
+  overviewSvg?: string;
   onSeek: (seconds: number) => void;
 };
 
-export function RecordingOverview({ duration, playheadSec, currentMinute, viewStartSec, viewSeconds, minutes, predictedIntervals, annotationIntervals, annotationsAvailable, onSeek }: OverviewProps) {
+export function RecordingOverview({ duration, playheadSec, viewStartSec, viewSeconds, timelineHeight = 132, overviewSvg, onSeek }: OverviewProps) {
   const [overviewWidth, setOverviewWidth] = useState(0);
   const safeDuration = finite(duration) && duration > 0 ? duration : 1;
   const safePlayhead = finite(playheadSec) ? clamp(playheadSec, 0, safeDuration) : 0;
-  const fullMinutes = Math.max(1, safeDuration / 60);
   const safeViewSeconds = finite(viewSeconds) && viewSeconds > 0 ? viewSeconds : Math.min(10, safeDuration);
-  const absoluteViewStart = finite(currentMinute * 60 + viewStartSec) ? clamp(currentMinute * 60 + viewStartSec, 0, safeDuration) : 0;
+  const absoluteViewStart = finite(viewStartSec) ? clamp(viewStartSec, 0, safeDuration) : 0;
   const viewX = clamp(absoluteViewStart / safeDuration, 0, 1) * 1000;
   const viewWidth = Math.max(2, Math.min(Math.min(safeViewSeconds, safeDuration) / safeDuration * 1000, 1000 - viewX));
   const playheadX = safePlayhead / safeDuration * 1000;
-  const safeIntervals = (annotationsAvailable ? annotationIntervals : predictedIntervals)
-    .filter((interval) => finite(interval.startSeconds) && finite(interval.endSeconds) && interval.endSeconds > interval.startSeconds)
-    .map((interval) => ({
-      startSeconds: clamp(interval.startSeconds, 0, safeDuration),
-      endSeconds: clamp(interval.endSeconds, 0, safeDuration),
-    }))
-    .filter((interval) => interval.endSeconds > interval.startSeconds);
   const onPress = (event: GestureResponderEvent) => {
     const x = pressX(event);
     if (x != null && overviewWidth > 0) onSeek(clamp(x / overviewWidth * safeDuration, 0, safeDuration));
   };
 
-  return <Pressable accessibilityRole="button" accessibilityLabel="Full recording timeline. Tap to seek to that point." onLayout={(event) => setOverviewWidth(event.nativeEvent.layout.width)} onPress={onPress} style={styles.timeline}>
-    <Svg width="100%" height={86} viewBox="0 0 1000 86" preserveAspectRatio="none">
-      <Rect width="1000" height="86" rx={6} fill="#10252A" />
-      <Rect y={13} width={1000} height={18} fill="#0A171B" />
-      <Rect y={43} width={1000} height={18} fill="#0A171B" />
-      {minutes.filter((item) => Number.isInteger(item.minute_index) && item.minute_index >= 0 && item.minute_index * 60 < safeDuration).map((item) => {
-        const x = item.minute_index / fullMinutes * 1000;
-        const width = Math.max(Math.min(60, safeDuration - item.minute_index * 60) / safeDuration * 1000, 1);
-        return <Rect key={item.minute_index} x={x} y={15} width={width + 0.5} height={14} fill={item.is_apnea ? '#D84352' : '#17856B'} opacity={item.is_apnea ? 0.9 : 0.7} />;
-      })}
-      {safeIntervals.map((interval, index) => <Rect key={`apnea${index}`} x={interval.startSeconds / safeDuration * 1000} y={45} width={Math.max(1, (interval.endSeconds - interval.startSeconds) / safeDuration * 1000)} height={14} fill="#D84352" opacity={annotationsAvailable ? 1 : 0.5} />)}
-      <Rect x={clamp(playheadX - 1, 0, 998)} y={7} width={2} height={66} fill="#F4F7F7" />
-      <Rect x={viewX} y={7} width={viewWidth} height={66} fill="#49E3A0" fillOpacity={0.08} stroke="#6EE7E7" strokeWidth={1.5} />
-      <SvgText x={0} y={83} fill="#A9C3C5" fontSize="11">00:00</SvgText>
-      <SvgText x={1000} y={83} fill="#A9C3C5" fontSize="11" textAnchor="end">{timeLabel(safeDuration)}</SvgText>
+  return <Pressable accessibilityRole="button" accessibilityLabel="Full recording timeline. Tap to seek to that point." onLayout={(event) => setOverviewWidth(event.nativeEvent.layout.width)} onPress={onPress} style={[styles.timeline, { height: timelineHeight }]}>
+    {overviewSvg ? <SvgXml xml={overviewSvg} width="100%" height={timelineHeight} preserveAspectRatio="none" /> : <View style={[styles.overviewPlaceholder, { height: timelineHeight }]}><Text style={styles.chartMessage}>Loading Python timeline…</Text></View>}
+    <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width="100%" height={timelineHeight} viewBox="0 0 1000 132" preserveAspectRatio="none">
+      <Rect x={clamp(playheadX - 1, 0, 998)} y={18} width={2} height={72} fill="#F4F7F7" />
+      <Rect x={viewX} y={18} width={viewWidth} height={72} fill="#49E3A0" fillOpacity={0.08} stroke="#20b781" strokeWidth={1.5} />
     </Svg>
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
-  chart: { width: '100%', height: 340, minHeight: 260, overflow: 'hidden', borderRadius: 12, borderWidth: 1, borderColor: '#29454B', alignItems: 'center', justifyContent: 'center' },
+  chart: { width: '100%', overflow: 'hidden', borderRadius: 12, borderWidth: 1, borderColor: '#314B5D', alignItems: 'center', justifyContent: 'center' },
+  chartFixed: { height: 340, minHeight: 260 },
+  chartFlex: { flex: 1, minHeight: 240 },
   chartError: { alignItems: 'center', gap: 4 },
   chartMessage: { color: '#A9C3C5', fontSize: 14, padding: 20, textAlign: 'center' },
   chartHint: { color: '#A9C3C5', fontSize: 12, lineHeight: 18 },
   link: { color: '#D7E9E9', fontSize: 14, fontWeight: '700' },
-  timeline: { width: '100%', minHeight: 86, borderRadius: 6, overflow: 'hidden' },
+  timeline: { width: '100%', height: 132, borderRadius: 6, overflow: 'hidden', position: 'relative' },
+  overviewPlaceholder: { height: 132, justifyContent: 'center', alignItems: 'center' },
 });

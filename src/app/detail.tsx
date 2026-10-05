@@ -2,12 +2,12 @@ import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
+import { AppButton, DetailsDisclosure, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { EcgWaveform, RecordingOverview } from '@/components/ecg-monitor';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { getSignalMinute, type SignalMinute } from '@/lib/inference';
+import { getRecordSummary, getSignalMinute, type RecordSummary, type SignalMinute } from '@/lib/inference';
 import { addSymptomEvent, deleteSymptomEvent, getEcgUploadOwner, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listSymptomEvents, SYMPTOM_TAGS, uploadEcgAnnotations, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type SymptomTag } from '@/lib/queries';
 
 const SPEEDS = [1, 5, 20] as const;
@@ -30,13 +30,20 @@ function predictionIntervals(minutes: PredictionMinute[], duration: number) {
 }
 
 export default function DetailScreen() {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  // The side-by-side review layout needs enough vertical room for a complete
+  // ECG panel. Short desktop windows use the scrollable responsive layout.
+  const desktop = width >= 1100 && height >= 1050;
   const { study, update } = useUploadState();
   const { session } = useAuth();
   const [run, setRun] = useState<PredictionRun | null>(null);
   const [minutes, setMinutes] = useState<PredictionMinute[]>([]);
   const [events, setEvents] = useState<EcgSymptomEvent[]>([]);
   const [signal, setSignal] = useState<SignalMinute | null>(null);
+  const [recordSummary, setRecordSummary] = useState<RecordSummary | null>(null);
+  const [summaryFetch, setSummaryFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
+  const [summaryRetry, setSummaryRetry] = useState(0);
+  const [intervalsOpen, setIntervalsOpen] = useState(true);
   const [annotationOwner, setAnnotationOwner] = useState(false);
   const [annotationBusy, setAnnotationBusy] = useState(false);
   const [annotationError, setAnnotationError] = useState('');
@@ -44,7 +51,7 @@ export default function DetailScreen() {
   const [selectedPeak, setSelectedPeak] = useState<{ minute: number; index: number } | null>(null);
   const [playheadSec, setPlayheadSec] = useState(0);
   const [viewStartSec, setViewStartSec] = useState(0);
-  const [viewSeconds, setViewSeconds] = useState(10);
+  const [viewSeconds, setViewSeconds] = useState(5);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [signalMode, setSignalMode] = useState<'raw' | 'filtered'>('filtered');
   const [playing, setPlaying] = useState(false);
@@ -73,11 +80,17 @@ export default function DetailScreen() {
   const currentMinute = Math.min(Math.floor(safePlayheadSec / 60), Math.max(0, Math.ceil(totalDuration / 60) - 1));
   const currentSecond = safePlayheadSec - currentMinute * 60;
   const signalKey = `${study.uploadId ?? ''}:${currentMinute}:${signalMode}:${signalRetry}`;
+  const summaryKey = `${study.uploadId ?? ''}:${run?.id ?? ''}:${summaryRetry}`;
+  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : '';
   const currentSignal = signal?.uploadId === study.uploadId && signal.minuteIndex === currentMinute && signal.mode === signalMode ? signal : null;
+  const currentRecordSummary = recordSummary?.uploadId === study.uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
   const currentEvents = events.filter((event) => event.ecg_upload_id === study.uploadId);
   const currentPrediction = minutes.find((item) => item.minute_index === currentMinute);
   const predictedApneaIntervals = useMemo(() => predictionIntervals(minutes, totalDuration), [minutes, totalDuration]);
-  const apneaIntervals = currentSignal?.apneaAnnotationsAvailable ? currentSignal.apneaIntervals : predictedApneaIntervals;
+  const annotationsAvailable = currentRecordSummary?.apneaAnnotationsAvailable ?? currentSignal?.apneaAnnotationsAvailable ?? false;
+  const apneaIntervals = currentRecordSummary?.apneaAnnotationsAvailable
+    ? currentRecordSummary.apneaIntervals
+    : currentSignal?.apneaAnnotationsAvailable ? currentSignal.apneaIntervals : predictedApneaIntervals;
   const apneaMinutes = run?.apnea_minutes ?? minutes.filter((item) => item.is_apnea).length;
   const apneaPercent = run?.apnea_percent ?? (minutes.length ? apneaMinutes * 100 / minutes.length : 0);
   const signalPending = run?.status === 'completed'
@@ -146,6 +159,15 @@ export default function DetailScreen() {
       .catch((reason) => { if (!cancelled) { setSignalError(reason instanceof Error ? reason.message : 'Could not load the ECG signal.'); setSignalErrorKey(signalKey); } });
     return () => { cancelled = true; };
   }, [study.uploadId, currentMinute, signalMode, signalKey, signalRetry, run?.status]);
+
+  useEffect(() => {
+    if (!study.uploadId || run?.status !== 'completed') return;
+    let cancelled = false;
+    getRecordSummary(study.uploadId)
+      .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
+      .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: reason instanceof Error ? reason.message : 'Could not load recording summary.' }); });
+    return () => { cancelled = true; };
+  }, [study.uploadId, run?.status, summaryKey]);
 
   useEffect(() => {
     if (!playing) return;
@@ -281,18 +303,20 @@ export default function DetailScreen() {
   const hasPreviousApnea = apneaIntervals.some((interval) => Number.isFinite(interval.startSeconds) && interval.startSeconds < safePlayheadSec);
   const hasNextApnea = apneaIntervals.some((interval) => Number.isFinite(interval.startSeconds) && interval.startSeconds > safePlayheadSec);
 
-  return <ScrollView style={styles.scroll} contentContainerStyle={[styles.page, width > 900 && styles.pageWide]}>
-    <PageIntro eyebrow="ECG MONITOR · STUDY REVIEW" title={study.studyId || 'Study'} description={`${study.sampleRate || 100} Hz · ${study.lead || 'first ECG channel'} · ${study.fileName || ''}`} />
+  return <ScrollView scrollEnabled={!desktop} style={[styles.scroll, desktop && styles.desktopScroll]} contentContainerStyle={[styles.page, desktop && styles.pageDesktop]}>
+    {desktop ? <View style={styles.desktopHeader}><Text style={styles.chartHint}>ECG MONITOR · STUDY REVIEW</Text><Text style={styles.desktopTitle}>{study.studyId || 'Study'}</Text><Text style={styles.chartHint}>{study.sampleRate || 100} Hz · {study.lead || 'first ECG channel'} · {study.fileName || ''}</Text></View> : <PageIntro eyebrow="ECG MONITOR · STUDY REVIEW" title={study.studyId || 'Study'} description={`${study.sampleRate || 100} Hz · ${study.lead || 'first ECG channel'} · ${study.fileName || ''}`} />}
     {loading ? <GlassPanel style={styles.panel}><ActivityIndicator color={colors.accent} /></GlassPanel> : null}
     {error ? <GlassPanel style={styles.panel}><Text accessibilityRole="alert" style={styles.error}>{error}</Text></GlassPanel> : null}
     {run?.status === 'completed' ? <>
-      <View style={styles.stats}>
+      <View style={[styles.studyGrid, desktop && styles.studyGridDesktop]}>
+      <View style={[styles.monitorColumn, desktop && styles.monitorColumnDesktop]}>
+      {desktop ? <View style={styles.compactStats}><Text style={styles.chartHint}>Model apnea: {apneaMinutes} / {run.total_minutes ?? minutes.length} min · {apneaPercent.toFixed(1)}%</Text><Text style={styles.chartHint}>Estimated HR: {currentSignal?.estimatedBpm == null ? '— BPM' : `~${currentSignal.estimatedBpm} BPM`}</Text></View> : <View style={styles.stats}>
         <Stat label="Predicted apnea minutes" value={`${apneaMinutes} / ${run.total_minutes ?? minutes.length}`} sub="Independent minute classifications" />
         <Stat label="Predicted apnea proportion" value={`${apneaPercent.toFixed(1)}%`} sub="Apnea-classified ÷ analyzed minutes" />
         <Stat label="Estimated heart rate" value={currentSignal?.estimatedBpm == null ? '— BPM' : `~${currentSignal.estimatedBpm} BPM`} sub="Approximate · derived from detected beats" />
-      </View>
+      </View>}
 
-      <GlassPanel style={styles.monitorPanel}>
+      <GlassPanel style={[styles.monitorPanel, desktop && styles.monitorPanelDesktop]}>
         <View style={styles.headingRow}>
           <View style={styles.headingCopy}>
             <Text style={styles.heading}>ECG monitor</Text>
@@ -321,6 +345,7 @@ export default function DetailScreen() {
           signal={currentSignal}
           signalPending={signalPending}
           signalError={signalError}
+          chartFlex={desktop}
           onRetry={() => setSignalRetry((value) => value + 1)}
           currentMinute={currentMinute}
           currentSecond={currentSecond}
@@ -342,41 +367,39 @@ export default function DetailScreen() {
         {selectedPeak && selectedPeak.minute === currentMinute && currentSignal && Number.isFinite(currentSignal.samplingRateHz) && currentSignal.samplingRateHz > 0 ? <Text style={styles.rrReadout}>
           Previous R–R: {selectedPeak.index > 0 ? `${((currentSignal.rPeakSamples[selectedPeak.index] - currentSignal.rPeakSamples[selectedPeak.index - 1]) * 1000 / currentSignal.samplingRateHz).toFixed(0)} ms` : '—'} · Next R–R: {selectedPeak.index + 1 < currentSignal.rPeakSamples.length ? `${((currentSignal.rPeakSamples[selectedPeak.index + 1] - currentSignal.rPeakSamples[selectedPeak.index]) * 1000 / currentSignal.samplingRateHz).toFixed(0)} ms` : '—'}
         </Text> : null}
-        {currentPrediction ? <Text style={styles.copy}>Minute {currentMinute + 1} probability: {(currentPrediction.apnea_probability * 100).toFixed(1)}% · threshold 50%</Text> : <Text style={styles.copy}>No complete-minute model result for this portion of the recording.</Text>}
         <View style={styles.minuteControls}>
           <AppButton compact variant="quiet" disabled={!hasPreviousApnea} onPress={() => moveToApnea(-1)}><Text style={styles.link}>Previous apnea</Text></AppButton>
-          <Text style={styles.copy}>Minute {currentMinute + 1} of {Math.ceil(totalDuration / 60)}</Text>
           <AppButton compact variant="quiet" disabled={!hasNextApnea} onPress={() => moveToApnea(1)}><Text style={styles.link}>Next apnea</Text></AppButton>
         </View>
       </GlassPanel>
 
-      <GlassPanel style={styles.panel}>
+      <GlassPanel style={[styles.panel, desktop && styles.overviewPanelDesktop]}>
         <View style={styles.headingRow}>
-          <View style={styles.headingCopy}><Text style={styles.heading}>Recording overview</Text><Text style={styles.copy}>Full recording · click or tap to seek · red = apnea · green = non-apnea</Text></View>
+          <View style={styles.headingCopy}><Text style={styles.heading}>Recording overview</Text><Text style={styles.copy}>Full recording · click or tap to seek · {annotationsAvailable ? 'red = WFDB A annotations' : 'red = model predictions'}</Text></View>
           <View style={styles.headingActions}>
             {annotationOwner && !reportLocked ? <AppButton compact variant="quiet" disabled={annotationBusy} onPress={() => { void attachAnnotations(); }}><Text style={styles.link}>{annotationBusy ? 'Attaching…' : 'Add WFDB annotations'}</Text></AppButton> : null}
             <AppButton compact disabled={reportLocked} onPress={() => { setEventError(''); setSelectedSymptoms([]); setSymptomModal(true); }}><Text style={styles.buttonText}>＋ Add symptom</Text></AppButton>
           </View>
         </View>
-        <View style={styles.timelineLegend}>
-          <Text style={styles.chartHint}>MODEL · red=apnea, green=non-apnea</Text>
-          <Text style={styles.chartHint}>{currentSignal?.apneaAnnotationsAvailable ? 'WFDB · red=A apnea annotations' : 'MODEL · grouped predicted apnea intervals'}</Text>
-        </View>
         <RecordingOverview
           duration={totalDuration}
           playheadSec={safePlayheadSec}
-          currentMinute={currentMinute}
-          viewStartSec={viewStartSec}
+          viewStartSec={currentMinute * 60 + viewStartSec}
           viewSeconds={viewSeconds}
-          minutes={minutes}
-          predictedIntervals={predictedApneaIntervals}
-          annotationIntervals={currentSignal?.apneaIntervals ?? []}
-          annotationsAvailable={Boolean(currentSignal?.apneaAnnotationsAvailable)}
+          timelineHeight={desktop ? 88 : undefined}
+          overviewSvg={currentRecordSummary?.charts.screen.fullNightOverviewSvg}
           onSeek={jumpTo}
         />
         {annotationMessage ? <Text style={styles.chartHint}>{annotationMessage}</Text> : null}
         {annotationError ? <Text accessibilityRole="alert" style={styles.error}>{annotationError}</Text> : null}
-        {currentEvents.length ? <View style={styles.eventList}>
+        {currentEvents.length > 0 && desktop ? <DetailsDisclosure title={`Symptom events (${currentEvents.length})`}>
+          <ScrollView style={styles.eventListDesktop} nestedScrollEnabled>{currentEvents.map((event) => <View key={event.id} style={styles.eventRow}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Seek to ${timeLabel(event.occurred_at_seconds)}: ${event.symptoms.join(', ')}`} onPress={() => jumpTo(event.occurred_at_seconds)} style={styles.eventContent}>
+              <Text style={styles.eventTime}>{timeLabel(event.occurred_at_seconds)}</Text><Text style={styles.copy}>{event.symptoms.join(' · ')}</Text>
+            </Pressable>
+            {!reportLocked && event.created_by === session?.user?.id ? <AppButton compact variant="quiet" disabled={eventBusy} onPress={() => { void removeSymptom(event.id); }}><Text style={styles.deleteText}>Remove</Text></AppButton> : null}
+          </View>)}</ScrollView>
+        </DetailsDisclosure> : currentEvents.length > 0 ? <ScrollView style={styles.eventList} nestedScrollEnabled>
           <Text style={styles.subheading}>Symptom events</Text>
           {currentEvents.map((event) => <View key={event.id} style={styles.eventRow}>
             <Pressable accessibilityRole="button" accessibilityLabel={`Seek to ${timeLabel(event.occurred_at_seconds)}: ${event.symptoms.join(', ')}`} onPress={() => jumpTo(event.occurred_at_seconds)} style={styles.eventContent}>
@@ -384,10 +407,33 @@ export default function DetailScreen() {
             </Pressable>
             {!reportLocked && event.created_by === session?.user?.id ? <AppButton compact variant="quiet" disabled={eventBusy} onPress={() => { void removeSymptom(event.id); }}><Text style={styles.deleteText}>Remove</Text></AppButton> : null}
           </View>)}
-        </View> : <Text style={styles.copy}>No symptom events recorded.</Text>}
+        </ScrollView> : <Text style={styles.copy}>No symptom events recorded.</Text>}
         {eventError ? <Text accessibilityRole="alert" style={styles.error}>{eventError}</Text> : null}
         {reportLocked ? <Text style={styles.chartHint}>This symptom log is locked with the approved report.</Text> : null}
       </GlassPanel>
+      </View>
+      <GlassPanel style={[styles.intervalPanel, desktop && (intervalsOpen ? styles.intervalPanelDesktop : styles.intervalPanelCollapsed)]}>
+        {desktop && !intervalsOpen ? <Pressable accessibilityRole="button" accessibilityLabel="Show apnea intervals" onPress={() => setIntervalsOpen(true)} style={styles.collapsedIntervalsButton}><Text style={styles.intervalToggle}>Show</Text></Pressable> : <>
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: intervalsOpen }} onPress={() => setIntervalsOpen((open) => !open)} style={styles.intervalHeader}>
+            <View style={styles.headingCopy}>
+              <Text style={styles.heading}>Apnea intervals</Text>
+              <Text style={styles.chartHint}>{annotationsAvailable ? 'WFDB annotation runs' : 'Model-predicted minute runs'} · {apneaIntervals.length} intervals</Text>
+            </View>
+            <Text style={styles.intervalToggle}>{intervalsOpen ? 'Hide' : 'Show'}</Text>
+          </Pressable>
+          {intervalsOpen ? <>
+            {summaryError ? <View style={styles.summaryError}><Text style={styles.chartHint}>{summaryError}</Text><AppButton compact variant="quiet" onPress={() => setSummaryRetry((value) => value + 1)}><Text style={styles.link}>Retry</Text></AppButton></View> : null}
+            <View style={styles.intervalColumns}><Text style={styles.intervalIndex}>#</Text><Text style={styles.intervalTime}>Start</Text><Text style={styles.intervalTime}>End</Text><Text style={styles.intervalDuration}>min</Text></View>
+            <ScrollView style={[styles.intervalList, desktop && styles.intervalListDesktop]} nestedScrollEnabled>
+              {apneaIntervals.map((interval, index) => <Pressable key={`${annotationsAvailable ? 'ann' : 'model'}-${index}`} accessibilityRole="button" onPress={() => jumpTo(interval.startSeconds)} style={styles.intervalRow}>
+                <Text style={styles.intervalIndex}>{index + 1}</Text><Text style={styles.intervalTime}>{timeLabel(interval.startSeconds)}</Text><Text style={styles.intervalTime}>{timeLabel(interval.endSeconds)}</Text><Text style={styles.intervalDuration}>{((interval.endSeconds - interval.startSeconds) / 60).toFixed(0)}</Text>
+              </Pressable>)}
+              {!apneaIntervals.length ? <Text style={styles.chartHint}>No apnea intervals are available.</Text> : null}
+            </ScrollView>
+          </> : null}
+        </>}
+      </GlassPanel>
+      </View>
     </> : !loading ? <GlassPanel style={styles.panel}><Text style={styles.copy}>{run?.status === 'failed' ? `Analysis failed: ${run.error_message ?? 'unknown error'}` : 'No completed model analysis is available yet.'}</Text></GlassPanel> : null}
     <View style={styles.footer}><AppButton variant="quiet" onPress={() => router.push('/')}><Text style={styles.link}>Back to Home</Text></AppButton><AppButton onPress={() => router.push('/summary')}><Text style={styles.buttonText}>Review report</Text></AppButton></View>
 
@@ -422,14 +468,16 @@ function ToolButton({ children, selected, onPress }: { children: string; selecte
 }
 
 const styles = StyleSheet.create({
-  scroll: { flex: 1 }, page: { width: '100%', maxWidth: 1280, alignSelf: 'center', padding: 16, paddingBottom: 104, gap: 14 }, pageWide: { paddingHorizontal: 24 },
+  scroll: { flex: 1 }, desktopScroll: { overflow: 'hidden' }, page: { width: '100%', maxWidth: 1280, alignSelf: 'center', padding: 16, paddingBottom: 104, gap: 14 }, pageDesktop: { flex: 1, maxWidth: 1600, height: '100%', padding: 8, paddingBottom: 6, gap: 6, overflow: 'hidden' }, desktopHeader: { gap: 1, marginBottom: 0 }, desktopTitle: { color: colors.text, fontSize: 22, lineHeight: 25, fontWeight: '800' }, compactStats: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingHorizontal: 2 },
+  studyGrid: { gap: 14 }, studyGridDesktop: { flex: 1, minHeight: 0, flexDirection: 'row', gap: 10 }, monitorColumn: { gap: 12 }, monitorColumnDesktop: { flex: 1, minWidth: 0, minHeight: 0, gap: 8 },
   gate: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24 }, title: { color: colors.text, fontSize: 24, fontWeight: '800' },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 }, stat: { flex: 1, minWidth: 190, gap: 5 }, statLabel: { color: colors.muted, fontSize: 13, fontWeight: '700' }, statValue: { color: colors.text, fontSize: 23, fontWeight: '800' },
-  panel: { gap: 12 }, monitorPanel: { gap: 12, backgroundColor: '#071419', borderColor: '#29454B' }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, headingRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headingCopy: { flex: 1, minWidth: 150, gap: 3 }, headingActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }, copy: { color: colors.text, fontSize: 14, lineHeight: 21 }, subheading: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  panel: { gap: 12 }, monitorPanel: { gap: 12, backgroundColor: '#071419', borderColor: '#29454B' }, monitorPanelDesktop: { flex: 1, minHeight: 430, padding: 11, gap: 7 }, overviewPanelDesktop: { padding: 9, gap: 6 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, headingRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, headingCopy: { flex: 1, minWidth: 150, gap: 3 }, headingActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }, copy: { color: colors.text, fontSize: 14, lineHeight: 21 }, subheading: { color: colors.text, fontSize: 15, fontWeight: '800' },
+  intervalPanel: { gap: 8 }, intervalPanelDesktop: { width: 320, flexBasis: 320, flexGrow: 0, flexShrink: 0, minHeight: 0, padding: 12, gap: 6 }, intervalPanelCollapsed: { width: 64, flexBasis: 64, flexGrow: 0, flexShrink: 0, alignItems: 'center', justifyContent: 'center', minHeight: 0, padding: 4 }, collapsedIntervalsButton: { minWidth: 52, minHeight: 52, alignItems: 'center', justifyContent: 'center' }, intervalHeader: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8 }, intervalToggle: { color: colors.cyan, fontWeight: '800' }, intervalColumns: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 8 }, intervalRow: { flexDirection: 'row', alignItems: 'center', minHeight: 36, borderBottomWidth: 1, borderBottomColor: colors.border, paddingVertical: 5 }, intervalIndex: { width: 26, color: colors.muted, textAlign: 'right', paddingRight: 6, fontVariant: ['tabular-nums'] }, intervalTime: { flex: 1, color: colors.text, textAlign: 'center', fontVariant: ['tabular-nums'] }, intervalDuration: { width: 38, color: colors.text, textAlign: 'right', fontVariant: ['tabular-nums'] }, intervalList: { maxHeight: 360 }, intervalListDesktop: { flex: 1, minHeight: 0, maxHeight: undefined }, summaryError: { gap: 2, paddingBottom: 6 },
   statusBadge: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999 }, apneaBadge: { backgroundColor: '#D8435230', borderWidth: 1, borderColor: '#D84352' }, normalBadge: { backgroundColor: '#17856B30', borderWidth: 1, borderColor: '#17856B' }, statusText: { color: colors.text, fontSize: 11, fontWeight: '800' },
   controls: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }, controlLabel: { color: '#A9C3C5', fontSize: 13, fontWeight: '700', marginLeft: 4 }, controlDivider: { width: 1, height: 28, backgroundColor: '#29454B', marginHorizontal: 4 }, toolButton: { minHeight: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: '#29454B', alignItems: 'center', justifyContent: 'center' }, toolSelected: { backgroundColor: '#49E3A0', borderColor: '#49E3A0' }, toolText: { color: '#D7E9E9', fontSize: 13, fontWeight: '700' }, toolTextSelected: { color: '#071419', fontSize: 13, fontWeight: '800' }, zoomRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 }, playhead: { color: '#A9C3C5', fontSize: 13, fontVariant: ['tabular-nums'], marginLeft: 'auto' },
-  chartHint: { color: '#A9C3C5', fontSize: 12, lineHeight: 18 }, rrReadout: { color: '#6EE7E7', fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] }, minuteControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }, timelineLegend: { gap: 2 },
-  eventList: { gap: 6, marginTop: 4 }, eventRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6 }, eventContent: { flex: 1, minHeight: 40, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12 }, eventTime: { color: '#FFD166', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }, deleteText: { color: colors.coral, fontSize: 13, fontWeight: '700' },
+  chartHint: { color: '#A9C3C5', fontSize: 12, lineHeight: 18 }, rrReadout: { color: '#6EE7E7', fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] }, minuteControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 },
+  eventList: { gap: 6, marginTop: 4 }, eventListDesktop: { maxHeight: 120 }, eventRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6 }, eventContent: { flex: 1, minHeight: 40, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12 }, eventTime: { color: '#FFD166', fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }, deleteText: { color: colors.coral, fontSize: 13, fontWeight: '700' },
   footer: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }, link: { color: colors.text, fontSize: 14, fontWeight: '700' }, buttonText: { color: colors.accentText, fontSize: 14, fontWeight: '800' }, error: { color: colors.coral, fontSize: 14, lineHeight: 21 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.66)', alignItems: 'center', justifyContent: 'center', padding: 20 }, modalCard: { width: '100%', maxWidth: 460, gap: 14, padding: 20, borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: '#060C12' }, tagList: { gap: 8 }, tag: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: '#29454B' }, tagSelected: { backgroundColor: '#49E3A020', borderColor: '#49E3A0' }, tagText: { color: colors.text, fontSize: 14 }, tagTextSelected: { color: '#49E3A0', fontSize: 14, fontWeight: '800' }, modalActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },
 });
