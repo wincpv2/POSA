@@ -1,4 +1,5 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const path = require('node:path');
 
 const appUrl = 'https://posa-sandy.vercel.app';
 const appHost = new URL(appUrl).hostname;
@@ -30,6 +31,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
@@ -45,6 +47,43 @@ function createWindow() {
   });
   void window.loadURL(appUrl);
 }
+
+ipcMain.handle('posa:print-html', async (event, html) => {
+  const senderUrl = event.senderFrame?.url || event.sender.getURL();
+  if (!isAppOrSignInUrl(senderUrl) || new URL(senderUrl).hostname !== appHost) {
+    throw new Error('Printing is only available from POSA.');
+  }
+  if (typeof html !== 'string' || html.length > 8_000_000) {
+    throw new Error('The report content is invalid or too large to print.');
+  }
+
+  const preview = new BrowserWindow({
+    width: 1000,
+    height: 1200,
+    minWidth: 800,
+    minHeight: 700,
+    show: false,
+    parent: BrowserWindow.fromWebContents(event.sender) || undefined,
+    autoHideMenuBar: true,
+    title: 'POSA Report Print Preview',
+    backgroundColor: '#FFFFFF',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+
+  try {
+    await preview.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    preview.show();
+    return await new Promise((resolve, reject) => {
+      preview.webContents.print({ silent: false, printBackground: true }, (success, reason) => {
+        if (success) resolve(true);
+        else if (reason?.toLowerCase().includes('cancel')) resolve(false);
+        else reject(new Error(reason || 'Could not open the print dialog.'));
+      });
+    });
+  } finally {
+    if (!preview.isDestroyed()) preview.close();
+  }
+});
 
 app.whenReady().then(() => {
   createWindow();

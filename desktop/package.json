@@ -1,6 +1,6 @@
 {
   "name": "posa-desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "POSA ECG sleep lab desktop app",
   "author": "POSA",
   "private": true,
@@ -16,6 +16,7 @@
     },
     "files": [
       "main.cjs",
+      "preload.cjs",
       "posa.ico",
       "package.json"
     ],
