@@ -414,6 +414,38 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
             logger.exception("Could not persist failure state for run %s", run_id)
 
 
+def _recover_worker_queue() -> None:
+    """Resume jobs persisted as queued and fail jobs interrupted by a restart."""
+    client = _storage_client()
+    fields = "id, patient_id, clinician_id, record_code, storage_path, original_filename, sampling_rate_hz, duration_seconds, deleted_at"
+    try:
+        interrupted = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "processing").limit(100).execute().data or []
+        for run in interrupted:
+            client.table("prediction_runs").update({
+                "status": "failed",
+                "error_message": "The inference service restarted during this job. Retry the analysis.",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run["id"]).execute()
+            client.table("ecg_uploads").update({"status": "failed"}).eq("id", run["ecg_upload_id"]).execute()
+
+        queued = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "queued").order("created_at").limit(100).execute().data or []
+        for run in queued:
+            response = client.table("ecg_uploads").select(fields).eq("id", run["ecg_upload_id"]).maybe_single().execute()
+            study = response.data
+            if not study or study.get("deleted_at"):
+                client.table("prediction_runs").update({
+                    "status": "failed",
+                    "error_message": "The uploaded study is unavailable. Upload it again to retry.",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", run["id"]).execute()
+                continue
+            worker.submit(_process_run, run["id"], study)
+        if interrupted or queued:
+            logger.info("Recovered inference queue: %s interrupted, %s queued", len(interrupted), len(queued))
+    except Exception:
+        logger.exception("Could not recover persisted inference jobs at startup")
+
+
 class torch_inference_context:
     """Small context wrapper to keep torch import isolated to model startup."""
 
@@ -442,6 +474,7 @@ async def lifespan(_: FastAPI):
         "is_active": True,
     }, on_conflict="name,version").execute()
     model_id = registered.data[0]["id"]
+    _recover_worker_queue()
     logger.info("Loaded %s %s on %s", MODEL_NAME, MODEL_VERSION, device)
     yield
     worker.shutdown(wait=False, cancel_futures=True)
