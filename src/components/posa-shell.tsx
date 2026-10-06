@@ -1,9 +1,10 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Slot, router, usePathname } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { PosaText } from './posa-ui';
 import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
@@ -23,6 +24,11 @@ const icons = {
   summary: <><Path d="M6 3h9l4 4v14H6z" /><Path d="M15 3v5h4M9 12h7M9 16h7" /></>,
 } as const;
 
+type DisplaySize = 'compact' | 'standard' | 'large';
+const DISPLAY_SIZE_KEY = 'posa:desktop-display-size';
+const displayZoom: Record<DisplaySize, number> = { compact: 0.9, standard: 1, large: 1.1 };
+const displaySizes: DisplaySize[] = ['compact', 'standard', 'large'];
+
 function NavIcon({ name, color }: { name: keyof typeof icons; color: string }) {
   return <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">{icons[name]}</Svg>;
 }
@@ -30,9 +36,32 @@ function NavIcon({ name, color }: { name: keyof typeof icons; color: string }) {
 function Workspace() {
   const pathname = usePathname();
   const { width } = useWindowDimensions();
+  const desktopWeb = Platform.OS === 'web' && width >= 900;
   const { study } = useUploadState();
   const { session, signOut } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [displaySize, setDisplaySize] = useState<DisplaySize>('standard');
+  const [displayReady, setDisplayReady] = useState(false);
+
+  useEffect(() => {
+    if (!desktopWeb) {
+      setDisplayReady(true);
+      return;
+    }
+    setDisplayReady(false);
+    let active = true;
+    void AsyncStorage.getItem(DISPLAY_SIZE_KEY).then((saved) => {
+      if (active && saved && displaySizes.includes(saved as DisplaySize)) setDisplaySize(saved as DisplaySize);
+    }).catch((error) => console.warn('Could not load display size:', error)).finally(() => {
+      if (active) setDisplayReady(true);
+    });
+    return () => { active = false; };
+  }, [desktopWeb]);
+
+  function chooseDisplaySize(size: DisplaySize) {
+    setDisplaySize(size);
+    void AsyncStorage.setItem(DISPLAY_SIZE_KEY, size).catch((error) => console.warn('Could not save display size:', error));
+  }
   const email = session?.user?.email ?? '';
   const displayName: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
   const nextRequired = study.status === 'ready' && study.reportStatus === 'Approved' ? null
@@ -43,7 +72,7 @@ function Workspace() {
     ? `${study.studyId} · ${study.age ? `${study.age} y` : 'Age unavailable'} · ${study.sex || 'Sex unavailable'} · BMI ${study.bmi || '—'}`
     : 'Clinician workspace · No study selected';
 
-  return <View style={styles.root}>
+  return <View style={[styles.root, desktopWeb && ({ zoom: displayZoom[displaySize] } as unknown as ViewStyle)]}>
     <LinearGradient pointerEvents="none" colors={[colors.background, colors.gradientEnd]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
     <StatusBar style="light" />
     <View style={styles.header}>
@@ -83,11 +112,11 @@ function Workspace() {
         })}
       </View>
     </View>
-    {menuOpen ? <AccountMenu name={displayName} email={email} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} onOpenLog={() => { setMenuOpen(false); router.push('/activity' as never); }} /> : null}
+    {menuOpen ? <AccountMenu name={displayName} email={email} desktopWeb={desktopWeb} displaySize={displaySize} displayReady={displayReady} onDisplaySizeChange={chooseDisplaySize} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} onOpenLog={() => { setMenuOpen(false); router.push('/activity' as never); }} /> : null}
   </View>;
 }
 
-function AccountMenu({ name, email, onClose, onSignOut, onOpenLog }: { name: string; email: string; onClose: () => void; onSignOut: () => void; onOpenLog: () => void }) {
+function AccountMenu({ name, email, desktopWeb, displaySize, displayReady, onDisplaySizeChange, onClose, onSignOut, onOpenLog }: { name: string; email: string; desktopWeb: boolean; displaySize: DisplaySize; displayReady: boolean; onDisplaySizeChange: (size: DisplaySize) => void; onClose: () => void; onSignOut: () => void; onOpenLog: () => void }) {
   return <>
     <Pressable accessibilityLabel="Close account menu" onPress={onClose} style={styles.menuBackdrop} />
     <View accessibilityRole="menu" style={[styles.menu, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
@@ -96,6 +125,16 @@ function AccountMenu({ name, email, onClose, onSignOut, onOpenLog }: { name: str
         {email && email !== name ? <PosaText style={styles.menuEmail}>{email}</PosaText> : null}
       </View>
       <View style={styles.menuDivider} />
+      {desktopWeb ? <View style={styles.displaySection}>
+        <PosaText style={styles.displayTitle}>Display size</PosaText>
+        <View style={styles.displayOptions}>
+          {displaySizes.map((size) => <Pressable key={size} accessibilityRole="button" accessibilityState={{ selected: displaySize === size, disabled: !displayReady }} disabled={!displayReady} onPress={() => onDisplaySizeChange(size)} style={[styles.displayOption, displaySize === size && styles.displayOptionSelected, !displayReady && styles.displayOptionDisabled]}>
+            <PosaText style={[styles.displayOptionText, displaySize === size && styles.displayOptionTextSelected]}>{size === 'compact' ? '90%' : size === 'standard' ? '100%' : '110%'}</PosaText>
+          </Pressable>)}
+        </View>
+        <PosaText style={styles.displayCaption}>{displaySize[0].toUpperCase() + displaySize.slice(1)}</PosaText>
+      </View> : null}
+      {desktopWeb ? <View style={styles.menuDivider} /> : null}
       <Pressable accessibilityRole="menuitem" onPress={onOpenLog} style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}>
         <Svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke={colors.text} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><Path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" /></Svg>
         <PosaText selectable={false} style={styles.menuLog}>Deletion log</PosaText>
@@ -126,6 +165,7 @@ const styles = StyleSheet.create({
   menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
   menuIdentity: { paddingHorizontal: 12, paddingVertical: 10, gap: 2 }, menuName: { color: colors.text, fontSize: 15, fontWeight: '800' }, menuEmail: { color: colors.muted, fontSize: 13 },
   menuDivider: { height: 1, marginHorizontal: 8, backgroundColor: colors.border },
+  displaySection: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 }, displayTitle: { color: colors.text, fontSize: 13, fontWeight: '800' }, displayOptions: { flexDirection: 'row', gap: 6 }, displayOption: { flex: 1, minHeight: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border }, displayOptionSelected: { backgroundColor: colors.accent, borderColor: colors.accent }, displayOptionDisabled: { opacity: 0.55 }, displayOptionText: { color: colors.text, fontSize: 12, fontWeight: '700' }, displayOptionTextSelected: { color: colors.accentText, fontWeight: '800' }, displayCaption: { color: colors.muted, fontSize: 12 },
   menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' }, menuLog: { color: colors.text, fontSize: 14, fontWeight: '700' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
