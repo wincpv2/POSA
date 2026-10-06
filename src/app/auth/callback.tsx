@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { getQueryParams } from 'expo-auth-session/build/QueryParams';
 
@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 export default function AuthCallbackScreen() {
   const router = useRouter();
   const { session } = useAuth();
+  const navigating = useRef(false);
   const [callback] = useState(() => typeof window === 'undefined' ? null : getQueryParams(window.location.href));
   const { params, errorCode } = callback ?? { params: {}, errorCode: null };
   const accessToken = params.access_token;
@@ -22,6 +23,13 @@ export default function AuthCallbackScreen() {
         : null,
   );
 
+  const returnHome = useCallback(() => {
+    if (navigating.current) return;
+    navigating.current = true;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') window.location.replace('/');
+    else router.replace('/');
+  }, [router]);
+
   useEffect(() => {
     if (error) return;
     if (!accessToken || !refreshToken) return;
@@ -32,16 +40,16 @@ export default function AuthCallbackScreen() {
     void supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken }).then(({ error: sessionError }) => {
       if (!active) return;
       if (sessionError) setError(sessionError.message);
-      else if (typeof window !== 'undefined') window.history.replaceState(null, '', window.location.pathname);
+      else returnHome();
     }).catch((cause: unknown) => {
       if (active) setError(cause instanceof Error ? cause.message : 'Could not complete sign-in. Please try again.');
     });
     return () => { active = false; clearTimeout(timeout); };
-  }, [accessToken, error, refreshToken]);
+  }, [accessToken, error, refreshToken, returnHome]);
 
   useEffect(() => {
-    if (session) router.replace('/');
-  }, [router, session]);
+    if (session) returnHome();
+  }, [returnHome, session]);
 
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: colors.background, padding: 24 }}>
