@@ -669,7 +669,13 @@ def get_study_timeline(
         output = StringIO()
         fig.savefig(output, format="svg", metadata={"Date": None}, facecolor=palette["bg"], bbox_inches="tight", pad_inches=.08)
         markup = output.getvalue()
-    return {"uploadId": upload_id, "durationSeconds": duration, "source": "model_prediction", "svg": markup[markup.find("<svg"):]}
+    return {
+        "uploadId": upload_id,
+        "runId": run["id"],
+        "durationSeconds": duration,
+        "source": "model_prediction",
+        "svg": markup[markup.find("<svg"):],
+    }
 
 
 @app.post("/v1/studies/{upload_id}/summary")

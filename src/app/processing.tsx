@@ -1,14 +1,17 @@
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
-import { getRecordTimeline, getSignalMinute, startRecordSummary, startStudyAnalysis } from '@/lib/inference';
-import { getLatestPredictionRun, type PredictionRun } from '@/lib/queries';
+import { useAuth } from '@/lib/auth-context';
+import { getRecordTimelineCached, getSignalMinuteCached, startRecordSummary, startStudyAnalysis } from '@/lib/inference';
+import { writeRecentUploadsCache, writeStudyReviewCache } from '@/lib/offline-cache';
+import { getLatestPredictionRun, getStudyReport, listPredictionMinutes, listRecentEcgUploads, type PredictionRun } from '@/lib/queries';
 
 export default function ProcessingScreen() {
-  const { study, update } = useUploadState();
+  const { study, update, offlineDownload, retryOfflineDownload } = useUploadState();
+  const { session } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(study.errorMessage);
   const [monitorError, setMonitorError] = useState('');
@@ -19,13 +22,17 @@ export default function ProcessingScreen() {
   const statusErrorSince = useRef<number | null>(null);
   const timelineRun = useRef('');
   const summaryRun = useRef('');
+  const recentCacheRun = useRef('');
+  const reviewCacheRun = useRef('');
+  const userId = session?.user.id;
 
-  const loadDetailData = (uploadId: string) => {
+  const loadDetailData = useCallback((uploadId: string, runId: string) => {
+    if (!userId) return;
     setSignalState('loading');
     setTimelineState('loading');
-    getSignalMinute(uploadId, 0).then(() => setSignalState('ready')).catch(() => setSignalState('failed'));
-    getRecordTimeline(uploadId).then(() => setTimelineState('ready')).catch(() => setTimelineState('failed'));
-  };
+    getSignalMinuteCached(uploadId, 0, 'raw', runId, userId).then(() => setSignalState('ready')).catch(() => setSignalState('failed'));
+    getRecordTimelineCached(uploadId, runId, userId).then(() => setTimelineState('ready')).catch(() => setTimelineState('failed'));
+  }, [userId]);
 
   useEffect(() => {
     if (!study.uploadId) {
@@ -66,9 +73,19 @@ export default function ProcessingScreen() {
         });
         setError(run.error_message ?? '');
         if (run.status === 'completed') {
+          if (userId && reviewCacheRun.current !== run.id) {
+            reviewCacheRun.current = run.id;
+            void Promise.all([listPredictionMinutes(run.id), getStudyReport(study.uploadId!)]).then(([minutes, report]) =>
+              writeStudyReviewCache(userId, study.uploadId!, { run, minutes, reportStatus: report.status }),
+            ).catch(() => {});
+          }
+          if (userId && recentCacheRun.current !== run.id) {
+            recentCacheRun.current = run.id;
+            void listRecentEcgUploads(50).then((uploads) => writeRecentUploadsCache(userId, uploads)).catch(() => {});
+          }
           if (timelineRun.current !== run.id) {
             timelineRun.current = run.id;
-            loadDetailData(study.uploadId!);
+            loadDetailData(study.uploadId!, run.id);
           }
           if (run.summary_status === 'not_started' && summaryRun.current !== run.id) {
             summaryRun.current = run.id;
@@ -92,7 +109,7 @@ export default function ProcessingScreen() {
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [study.uploadId, update]);
+  }, [study.uploadId, update, loadDetailData, userId]);
 
   const retry = async () => {
     if (!study.uploadId) return;
@@ -124,6 +141,10 @@ export default function ProcessingScreen() {
 
   const done = run?.status === 'completed' || study.status === 'ready';
   const processing = study.status === 'queued' || study.status === 'processing';
+  const activeOfflineDownload = offlineDownload.uploadId === study.uploadId && offlineDownload.runId === run?.id;
+  const offlineProgressPercent = offlineDownload.totalMinutes > 0
+    ? Math.floor((offlineDownload.rawMinutes + offlineDownload.filteredMinutes) / (offlineDownload.totalMinutes * 2) * 100)
+    : 0;
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY WORKFLOW" title={done ? 'Analysis complete' : processing ? 'Analyzing ECG recording' : 'Analysis needs attention'} description="The model classifies complete one-minute ECG windows. Progress and results come from the inference service." />
     <GlassPanel style={styles.panel}>
@@ -137,7 +158,15 @@ export default function ProcessingScreen() {
           : run?.summary_status === 'failed' ? <><Text accessibilityRole="alert" style={styles.error}>{run.summary_error_message || 'Full-night summary failed.'}</Text><AppButton compact variant="quiet" onPress={() => { void retrySummary(); }}><Text style={styles.link}>Retry summary</Text></AppButton></>
             : <><Text style={styles.copy}>{run?.summary_stage || 'Starting full-night summary'} · {run?.summary_progress_percent ?? 0}%</Text><View accessibilityRole="progressbar" accessibilityLabel="Full-night ECG summary progress" style={styles.track}><View style={[styles.fillSecondary, { width: `${run?.summary_progress_percent ?? 0}%` }]} /></View></>}
         <Text style={styles.copy}>ECG signal: {prerequisiteLabel(signalState)} · Python timeline: {prerequisiteLabel(timelineState)}</Text>
-        {(signalState === 'failed' || timelineState === 'failed') ? <AppButton compact variant="quiet" onPress={() => loadDetailData(study.uploadId!)}><Text style={styles.link}>Retry signal and timeline</Text></AppButton> : null}
+        {(signalState === 'failed' || timelineState === 'failed') && run?.id ? <AppButton compact variant="quiet" onPress={() => loadDetailData(study.uploadId!, run.id)}><Text style={styles.link}>Retry signal and timeline</Text></AppButton> : null}
+        {activeOfflineDownload ? <View style={styles.offlineBlock}>
+          <Text style={styles.heading}>Offline ECG download</Text>
+          {offlineDownload.status === 'ready'
+            ? <Text style={styles.copy}>Ready for offline playback · 100%</Text>
+            : offlineDownload.status === 'failed'
+              ? <><Text accessibilityRole="alert" style={styles.error}>Download stopped at {offlineProgressPercent}%: {offlineDownload.error}</Text><AppButton compact variant="quiet" onPress={retryOfflineDownload}><Text style={styles.link}>Resume download</Text></AppButton></>
+              : <><Text style={styles.copy}>{offlineDownload.status === 'checking' ? 'Checking saved ECG' : `Saving ECG · ${offlineProgressPercent}%`} · Filtered {offlineDownload.filteredMinutes}/{offlineDownload.totalMinutes} min · Raw {offlineDownload.rawMinutes}/{offlineDownload.totalMinutes} min</Text><View accessibilityRole="progressbar" accessibilityLabel={`Offline ECG download ${offlineProgressPercent}%`} style={styles.track}><View style={[styles.fillSecondary, { width: `${offlineProgressPercent}%` }]} /></View></>}
+        </View> : null}
       </View> : null}
       {!processing && !done ? <Text accessibilityRole="alert" style={styles.error}>{error || 'Analysis could not finish.'}</Text> : null}
     </GlassPanel>
@@ -153,7 +182,7 @@ export default function ProcessingScreen() {
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   page: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 20, paddingTop: 24, paddingBottom: 56, gap: 18 },
-  panel: { gap: 12 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, secondaryWork: { gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 },
+  panel: { gap: 12 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, secondaryWork: { gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }, offlineBlock: { gap: 8, marginTop: 4 },
   copy: { color: colors.text, fontSize: 14, lineHeight: 21 },
   progressRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 10 },
   track: { height: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.14)', overflow: 'hidden' },

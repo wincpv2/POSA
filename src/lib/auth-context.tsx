@@ -5,6 +5,8 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import { Platform } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
+import { cancelOfflineSignalDownloads } from './inference';
+import { clearUserOfflineCache } from './offline-cache';
 import { supabase } from './supabase';
 
 // Set EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN in .env to limit Google's account picker.
@@ -103,6 +105,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signOut() {
+    const userId = session?.user.id;
+    if (userId) {
+      cancelOfflineSignalDownloads(userId);
+      await clearUserOfflineCache(userId).catch(() => {});
+    }
     await supabase.auth.signOut();
   }
 

@@ -7,8 +7,9 @@ import { EcgWaveform, RecordingOverview } from '@/components/ecg-monitor';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { getRecordSummary, getRecordTimeline, getSignalMinute, startRecordSummary, type RecordSummary, type RecordTimeline, type SignalMinute } from '@/lib/inference';
+import { getRecordSummary, getRecordTimelineCached, getSignalMinuteCached, startRecordSummary, type RecordSummary, type RecordTimeline, type SignalMinute } from '@/lib/inference';
 import { addSymptomEvent, deleteSymptomEvent, getEcgUploadOwner, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listSymptomEvents, SYMPTOM_TAGS, uploadEcgAnnotations, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type SymptomTag } from '@/lib/queries';
+import { readStudyReviewCache, writeStudyReviewCache, type CachedStudyReview } from '@/lib/offline-cache';
 
 const SPEEDS = [1, 5, 20] as const;
 const ZOOM_WINDOWS = [2.5, 5, 10, 20, 40, 80];
@@ -86,7 +87,8 @@ export default function DetailScreen() {
   const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : run?.summary_status === 'failed' ? run.summary_error_message ?? 'Full-night summary failed.' : '';
   const timelineKey = `${study.uploadId ?? ''}:${run?.id ?? ''}:${timelineRetry}`;
   const timelineError = timelineFetch.key === timelineKey ? timelineFetch.error : '';
-  const timelineLoading = run?.status === 'completed' && timeline?.uploadId !== study.uploadId && !timelineError;
+  const timelineMatchesRun = Boolean(timeline && timeline.uploadId === study.uploadId && timeline.runId === run?.id);
+  const timelineLoading = run?.status === 'completed' && !timelineMatchesRun && !timelineError;
   const currentSignal = signal?.uploadId === study.uploadId && signal.minuteIndex === currentMinute && signal.mode === signalMode ? signal : null;
   const currentRecordSummary = recordSummary?.uploadId === study.uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
   const currentEvents = events.filter((event) => event.ecg_upload_id === study.uploadId);
@@ -113,7 +115,25 @@ export default function DetailScreen() {
       return;
     }
     let cancelled = false;
+    const applyReview = (review: CachedStudyReview) => {
+      setRun(review.run);
+      setMinutes(review.minutes);
+      setReportLocked(review.reportStatus === 'Approved');
+      update({
+        reportStatus: review.reportStatus === 'Approved' ? 'Approved' : review.reportStatus === 'Reviewed' ? 'Reviewed' : 'Draft',
+        runId: review.run.id,
+        ...(review.run.total_minutes ? { durationSeconds: review.run.total_minutes * 60 } : {}),
+      });
+    };
     async function loadStudy() {
+      const initialCache = session?.user.id && study.runId
+        ? await readStudyReviewCache(session.user.id, study.uploadId!, study.runId).catch(() => null)
+        : null;
+      if (cancelled) return;
+      if (initialCache) {
+        applyReview(initialCache);
+        setLoading(false);
+      }
       try {
         const [latest, savedReport] = await Promise.all([
           getLatestPredictionRun(study.uploadId!),
@@ -121,21 +141,38 @@ export default function DetailScreen() {
         ]);
         const rows = latest?.status === 'completed' ? await listPredictionMinutes(latest.id) : [];
         if (cancelled) return;
-        setRun(latest);
-        setMinutes(rows);
-        setReportLocked(savedReport.status === 'Approved');
-        update({ reportStatus: savedReport.status });
+        if (latest?.status === 'completed') {
+          applyReview({ run: latest, minutes: rows, reportStatus: savedReport.status });
+        } else {
+          setRun(latest);
+          setMinutes(rows);
+          setReportLocked(savedReport.status === 'Approved');
+          update({ reportStatus: savedReport.status, runId: latest?.id ?? null });
+        }
+        if (latest?.status === 'completed' && session?.user.id) {
+          void writeStudyReviewCache(session.user.id, study.uploadId!, { run: latest, minutes: rows, reportStatus: savedReport.status }).catch(() => {});
+        }
         setLoading(false);
       } catch (reason) {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : 'Could not load study results.');
-          setLoading(false);
+        if (initialCache) {
+          if (!cancelled) setLoading(false);
+          return;
         }
+        const fallback = session?.user.id && study.uploadId && study.runId
+          ? await readStudyReviewCache(session.user.id, study.uploadId, study.runId).catch(() => null)
+          : null;
+        if (cancelled) return;
+        if (fallback) {
+          applyReview(fallback);
+        } else {
+          setError(reason instanceof Error ? reason.message : 'Could not load study results.');
+        }
+        setLoading(false);
       }
     }
     void loadStudy();
     return () => { cancelled = true; };
-  }, [study.uploadId, update]);
+  }, [study.uploadId, study.runId, update, session?.user.id]);
 
   useEffect(() => {
     if (!study.uploadId || !session?.user.id) return;
@@ -157,13 +194,14 @@ export default function DetailScreen() {
   }, [study.uploadId]);
 
   useEffect(() => {
-    if (!study.uploadId || run?.status !== 'completed') return;
+    if (!study.uploadId || !run?.id || run.status !== 'completed' || !session?.user.id) return;
     let cancelled = false;
-    getSignalMinute(study.uploadId, currentMinute, signalMode)
+    const controller = new AbortController();
+    getSignalMinuteCached(study.uploadId, currentMinute, signalMode, run.id, session.user.id, { signal: controller.signal })
       .then((value) => { if (!cancelled) { setSignal(value); setSignalError(''); setSignalErrorKey(''); } })
       .catch((reason) => { if (!cancelled) { setSignalError(reason instanceof Error ? reason.message : 'Could not load the ECG signal.'); setSignalErrorKey(signalKey); } });
-    return () => { cancelled = true; };
-  }, [study.uploadId, currentMinute, signalMode, signalKey, signalRetry, run?.status]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [study.uploadId, currentMinute, signalMode, signalKey, signalRetry, run?.id, run?.status, session?.user.id]);
 
   useEffect(() => {
     if (!study.uploadId || run?.status !== 'completed') return;
@@ -195,13 +233,13 @@ export default function DetailScreen() {
   }, [study.uploadId, run?.id, run?.status, run?.summary_status, summaryKey]);
 
   useEffect(() => {
-    if (!study.uploadId || run?.status !== 'completed') return;
+    if (!study.uploadId || !run?.id || run.status !== 'completed' || !session?.user.id) return;
     let cancelled = false;
-    getRecordTimeline(study.uploadId)
+    getRecordTimelineCached(study.uploadId, run.id, session.user.id)
       .then((value) => { if (!cancelled) setTimeline(value); })
       .catch((reason) => { if (!cancelled) setTimelineFetch({ key: timelineKey, error: reason instanceof Error ? reason.message : 'Python timeline unavailable.' }); });
     return () => { cancelled = true; };
-  }, [study.uploadId, run?.id, run?.status, timelineRetry, timelineKey]);
+  }, [study.uploadId, run?.id, run?.status, timelineRetry, timelineKey, session?.user.id]);
 
   const retrySummary = async () => {
     if (!study.uploadId) return;
@@ -434,8 +472,8 @@ export default function DetailScreen() {
           viewStartSec={currentMinute * 60 + viewStartSec}
           viewSeconds={viewSeconds}
           timelineHeight={desktop ? 88 : undefined}
-          overviewSvg={timeline?.uploadId === study.uploadId ? timeline.svg : undefined}
-          loading={timelineLoading || (run?.status === 'completed' && !timeline && !timelineError)}
+          overviewSvg={timelineMatchesRun ? timeline?.svg : undefined}
+          loading={timelineLoading || (run?.status === 'completed' && !timelineMatchesRun && !timelineError)}
           onSeek={jumpTo}
         />
         {timelineError ? <View style={styles.summaryError}><Text style={styles.chartHint}>{timelineError}</Text><AppButton compact variant="quiet" onPress={() => setTimelineRetry((value) => value + 1)}><Text style={styles.link}>Retry timeline</Text></AppButton></View> : null}
