@@ -36,7 +36,14 @@ export type PredictionRun = {
   apnea_percent: number | null;
   error_message: string | null;
   created_at: string;
+  summary_status: 'not_started' | 'queued' | 'processing' | 'completed' | 'failed';
+  summary_progress_percent: number;
+  summary_stage: string | null;
+  summary_error_message: string | null;
+  summary_updated_at: string | null;
 };
+
+const predictionRunFields = 'id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at, summary_status, summary_progress_percent, summary_stage, summary_error_message, summary_updated_at';
 
 export type PredictionMinute = {
   run_id: string;
@@ -75,7 +82,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
   const subjectCodeByPatient = new Map((relations ?? []).map((r) => [r.patient_id, r.subject_code]));
   const { data: runs, error: runsError } = await supabase
     .from('prediction_runs')
-    .select('id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at')
+    .select(predictionRunFields)
     .in('ecg_upload_id', uploads.map((row) => row.id))
     .order('created_at', { ascending: false });
   if (runsError) throw runsError;
@@ -103,7 +110,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
 
 export async function getLatestPredictionRun(uploadId: string): Promise<PredictionRun | null> {
   const { data, error } = await supabase.from('prediction_runs')
-    .select('id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at')
+    .select(predictionRunFields)
     .eq('ecg_upload_id', uploadId).order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
   return data as PredictionRun | null;

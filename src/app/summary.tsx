@@ -5,7 +5,8 @@ import { AppButton, DetailsDisclosure, GlassPanel, PageIntro, PosaText as Text }
 import ShareWithPatient from '@/components/share-with-patient';
 import { exportReportPdf, reportPdfBlob } from '@/components/report-export';
 import { Chart as PythonChart, NightSummaryPanel } from '@/components/night-summary';
-import { getRecordSummary, type RecordSummary } from '@/lib/inference';
+import { getRecordSummary, startRecordSummary, type RecordSummary } from '@/lib/inference';
+import { readRecordSummaryCache, writeRecordSummaryCache } from '@/lib/offline-cache';
 import { useAuth } from '@/lib/auth-context';
 import { EMPTY_REPORT, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listReportPdfs, listSymptomEvents, reportPdfUrl, saveReportPdf, saveStudyReportText, setStudyReportStatus, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type ReportStatus, type SavedReportPdf, type StudyReport } from '@/lib/queries';
 import { useUploadState } from '@/components/posa-state';
@@ -28,7 +29,6 @@ export default function SummaryScreen() {
   const [minutes, setMinutes] = useState<PredictionMinute[]>([]);
   const [recordSummary, setRecordSummary] = useState<RecordSummary | null>(null);
   const [summaryFetch, setSummaryFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
-  const [summaryRetry, setSummaryRetry] = useState(0);
   const [view, setView] = useState<'Night Summary' | 'Clinical report'>('Night Summary');
   const [opinion, setOpinion] = useState('');
   const [explanation, setExplanation] = useState('');
@@ -39,31 +39,90 @@ export default function SummaryScreen() {
   const [symptomEvents, setSymptomEvents] = useState<EcgSymptomEvent[]>([]);
   const [exporting, setExporting] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const summaryKey = `${uploadId ?? ''}:${run?.id ?? ''}:${summaryRetry}`;
-  const summaryLoading = run?.status === 'completed' && summaryFetch.key !== summaryKey;
-  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : '';
+  const summaryKey = `${uploadId ?? ''}:${run?.id ?? ''}`;
+  const currentRecordSummary = recordSummary?.uploadId === uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
+  const summaryLoading = run?.status === 'completed' && run.summary_status !== 'failed' && !currentRecordSummary && (run.summary_status !== 'completed' || summaryFetch.key !== summaryKey);
+  const summaryError = currentRecordSummary ? '' : summaryFetch.key === summaryKey ? summaryFetch.error : run?.summary_status === 'failed' ? run.summary_error_message ?? 'Full-night summary failed.' : '';
 
   useEffect(() => {
     if (!uploadId) return;
     let cancelled = false;
-    Promise.all([getStudyReport(uploadId), getLatestPredictionRun(uploadId), listReportPdfs(uploadId)])
-      .then(async ([saved, latest, savedPdfs]) => {
-        if (cancelled) return;
-        setReport(saved); setOpinion(saved.clinicianOpinion); setExplanation(saved.patientExplanation); setPdfs(savedPdfs ?? []); setRun(latest); update({ reportStatus: saved.status });
-        if (latest?.status === 'completed') setMinutes(await listPredictionMinutes(latest.id));
-      })
-      .catch((reason) => { if (!cancelled) setMessage(messageOf(reason, 'Could not load study results.')); });
+    if (session?.user.id && study.runId) {
+      void readRecordSummaryCache(session.user.id, uploadId, study.runId).then((cached) => {
+        if (!cancelled && cached?.uploadId === uploadId && cached.modelMetrics.runId === study.runId
+          && cached.charts?.screen?.heartRateSvg && cached.charts.screen.hourlyApneaSvg && cached.charts.screen.rrHistogramSvg) setRecordSummary(cached);
+      }).catch(() => {});
+    }
+    void getStudyReport(uploadId).then((saved) => {
+      if (!cancelled) { setReport(saved); setOpinion(saved.clinicianOpinion); setExplanation(saved.patientExplanation); update({ reportStatus: saved.status }); }
+    }).catch((reason) => { if (!cancelled) setMessage(messageOf(reason, 'Could not load the clinical report.')); });
+    void listReportPdfs(uploadId).then((savedPdfs) => {
+      if (!cancelled) setPdfs(savedPdfs ?? []);
+    }).catch((reason) => { if (!cancelled) setMessage(messageOf(reason, 'Could not load saved reports.')); });
+    void getLatestPredictionRun(uploadId).then(async (latest) => {
+      if (cancelled) return;
+      setRun(latest);
+      setSummaryFetch(latest ? (current) => current.key === `${uploadId}:` ? { key: '', error: '' } : current
+        : { key: `${uploadId}:`, error: 'No analysis run was found for this recording.' });
+      if (latest?.status !== 'completed') return;
+      void listPredictionMinutes(latest.id).then((rows) => { if (!cancelled) setMinutes(rows); })
+        .catch((reason) => { if (!cancelled) setMessage(messageOf(reason, 'Could not load model minute results.')); });
+      if (session?.user.id) {
+        const cached = await readRecordSummaryCache(session.user.id, uploadId, latest.id).catch(() => null);
+        if (!cancelled && cached?.uploadId === uploadId && cached.modelMetrics.runId === latest.id
+          && cached.charts?.screen?.heartRateSvg && cached.charts.screen.hourlyApneaSvg && cached.charts.screen.rrHistogramSvg) setRecordSummary(cached);
+      }
+    }).catch((reason) => {
+      if (!cancelled) setSummaryFetch({ key: `${uploadId}:`, error: messageOf(reason, 'Could not load the analysis run or its summary charts.') });
+    });
     return () => { cancelled = true; };
-  }, [uploadId, update]);
+  }, [uploadId, study.runId, update, session?.user.id]);
 
   useEffect(() => {
     if (!uploadId || run?.status !== 'completed') return;
     let cancelled = false;
-    getRecordSummary(uploadId)
-      .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
-      .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not load the ECG night summary.') }); });
+    let refreshing = false;
+    const refreshStatus = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        const latest = await getLatestPredictionRun(uploadId);
+        if (!cancelled && latest?.id === run.id) setRun(latest);
+      } catch { /* retain the last saved progress while offline */ }
+      finally { refreshing = false; }
+    };
+    if (run.summary_status === 'not_started') void startRecordSummary(uploadId).catch((reason) => {
+      if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not start the full-night summary.') });
+    });
+    if (run.summary_status === 'completed') {
+      getRecordSummary(uploadId)
+        .then((value) => {
+          if (!cancelled) {
+            setRecordSummary(value);
+            setSummaryFetch({ key: summaryKey, error: '' });
+            if (session?.user.id && value.modelMetrics.runId === run.id) void writeRecordSummaryCache(session.user.id, uploadId, run.id, value).catch(() => {});
+          }
+        })
+        .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not load the ECG night summary.') }); });
+    }
+    if (run.summary_status !== 'completed' && run.summary_status !== 'failed') {
+      void refreshStatus();
+      const timer = setInterval(() => { void refreshStatus(); }, 2000);
+      return () => { cancelled = true; clearInterval(timer); };
+    }
     return () => { cancelled = true; };
-  }, [uploadId, run?.status, summaryKey]);
+  }, [uploadId, run?.id, run?.status, run?.summary_status, summaryKey, session?.user.id]);
+
+  const retrySummary = async () => {
+    if (!uploadId) return;
+    try {
+      await startRecordSummary(uploadId, true);
+      const latest = await getLatestPredictionRun(uploadId);
+      setRun(latest);
+      setRecordSummary(null);
+      setSummaryFetch(latest ? { key: '', error: '' } : { key: `${uploadId}:`, error: 'The summary job started, but its analysis run is not visible yet.' });
+    } catch (reason) { setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not restart the full-night summary.') }); }
+  };
 
   useEffect(() => {
     if (!uploadId) return;
@@ -79,7 +138,6 @@ export default function SummaryScreen() {
   const locked = status === 'Approved';
   const editable = Boolean(uploadId) && !locked && !busy;
   const completed = run?.status === 'completed';
-  const currentRecordSummary = recordSummary?.uploadId === uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
   const estimates = currentRecordSummary?.modelMetrics;
   const proxyAhi = run?.status === 'completed' && run.total_minutes != null && run.total_minutes > 0 && run.apnea_minutes != null
     ? run.apnea_minutes / (run.total_minutes / 60) : null;
@@ -161,7 +219,7 @@ export default function SummaryScreen() {
   return <ScrollView contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY SUMMARY" title="Clinical summary" description={`${study.studyId || 'Study'} · report ${status.toLowerCase()}`} />
     <View style={styles.viewTabs}>{(['Night Summary', 'Clinical report'] as const).map((value) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: view === value }} onPress={() => setView(value)} style={[styles.viewTab, view === value && styles.viewTabActive]}><Text selectable={false} style={[styles.tabText, view === value && styles.tabTextActive]}>{value}</Text></Pressable>)}</View>
-    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => setSummaryRetry((value) => value + 1)} /> : <>
+    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => { void retrySummary(); }} /> : <>
 
     <GlassPanel style={styles.panel}>
       <Text style={styles.title}>Model results</Text>

@@ -160,6 +160,13 @@ function printHtmlOnWeb(html: string) {
 export async function exportReportPdf(options: ReportOptions): Promise<string> {
   const html = reportHtml(options);
   if (Platform.OS === 'web') {
+    const desktopPrint = (window as Window & {
+      posaDesktop?: { printHtml: (content: string) => Promise<boolean> };
+    }).posaDesktop?.printHtml;
+    if (desktopPrint) {
+      const printed = await desktopPrint(html);
+      return printed ? 'Report sent to the print dialog.' : 'Print preview closed without printing.';
+    }
     printHtmlOnWeb(html);
     return 'Choose "Save as PDF" in the print dialog to download the report.';
   }

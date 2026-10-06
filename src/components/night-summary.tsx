@@ -20,6 +20,9 @@ export function NightSummaryPanel({ summary, loading, error, run, minutes, durat
   const burden = summary?.labelledMinutes && summary.apneaLabelMinutes != null ? `${(summary.apneaLabelMinutes * 100 / summary.labelledMinutes).toFixed(1)}%` : 'Unavailable';
   const estimate = summary?.modelMetrics;
   const hrV = summary ? `${estimateValue(summary.sdnnMs, ' ms')} / ${estimateValue(summary.rmssdMs, ' ms')}` : pending;
+  const chartMessage = summary ? 'The inference summary did not include this chart.'
+    : loading ? `${run?.summary_stage || 'Generating ECG summary'} · ${run?.summary_progress_percent ?? 0}%`
+      : error || 'The inference summary is not available yet.';
   return <View style={styles.body}>
     <View style={styles.metrics}>
       <Metric label="Recording" value={durationSeconds > 0 ? durationLabel(durationSeconds) : 'Unavailable'} />
@@ -37,23 +40,24 @@ export function NightSummaryPanel({ summary, loading, error, run, minutes, durat
     </View>
     <Text style={styles.note}>Probability-weighted burden = 100 × Σpᵢ / N, where N is the number of analyzed minute windows. This score is not calibration-adjusted. Positive minutes use pᵢ ≥ 0.50; adjacent positive minutes form a predicted run. These are model outputs, not clinical apnea events or AHI. HRV uses {summary?.qrsAnnotationsAvailable ? 'normal-beat QRS annotations.' : 'automatically detected R-peaks and is an estimate.'}</Text>
     {loading ? <Text style={styles.note}>Calculating full-record ECG summary…</Text> : null}
-    {error ? <View style={styles.errorBox}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.retry}>Retry summary</Text></AppButton></View> : null}
+    {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+    {!summary ? <AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.retry}>{loading ? 'Restart summary' : 'Retry summary'}</Text></AppButton> : null}
     <View style={styles.charts}>
-      <Chart title="Minute median heart rate · red marks show A-label runs or model predictions" xml={summary?.charts.screen.heartRateSvg} aspect={12 / 3.4} wide />
+      <Chart title="Minute median heart rate · red marks show A-label runs or model predictions" xml={summary?.charts.screen.heartRateSvg} unavailableMessage={chartMessage} aspect={12 / 3.4} wide />
       <View style={[styles.secondaryCharts, wide && styles.secondaryChartsWide]}>
-        <Chart title="Hourly model apnea burden" xml={summary?.charts.screen.hourlyApneaSvg} aspect={8 / 3.4} half={wide} />
-        <Chart title="Plausible RR-interval distribution" xml={summary?.charts.screen.rrHistogramSvg} aspect={8 / 3.4} half={wide} />
+        <Chart title="Hourly model apnea burden" xml={summary?.charts.screen.hourlyApneaSvg} unavailableMessage={chartMessage} aspect={8 / 3.4} half={wide} />
+        <Chart title="Plausible RR-interval distribution" xml={summary?.charts.screen.rrHistogramSvg} unavailableMessage={chartMessage} aspect={8 / 3.4} half={wide} />
       </View>
     </View>
   </View>;
 }
 function Metric({ label, value }: { label: string; value: string }) { return <View style={styles.metric}><Text style={styles.metricLabel}>{label}</Text><Text style={styles.metricValue}>{value}</Text></View>; }
 const estimateValue = (value: number | null, suffix = '') => value == null ? 'Unavailable' : `${value.toFixed(0)}${suffix}`;
-export function Chart({ title, xml, aspect, wide, half }: { title: string; xml?: string; aspect: number; wide?: boolean; half?: boolean }) {
+export function Chart({ title, xml, aspect, wide, half, unavailableMessage = 'Python chart is unavailable until the inference summary loads.' }: { title: string; xml?: string; unavailableMessage?: string; aspect: number; wide?: boolean; half?: boolean }) {
   const [width, setWidth] = useState(0);
   return <View onLayout={(event) => setWidth(event.nativeEvent.layout.width)} style={[styles.chart, wide && styles.chartWide, half && styles.chartHalf]}>
     <Text style={styles.chartTitle}>{title}</Text>
-    {xml && width ? <SvgXml xml={xml} width="100%" height={Math.round(Math.max(0, width - 24) / aspect)} preserveAspectRatio="none" /> : <Text style={styles.note}>Python chart is unavailable until the inference summary loads.</Text>}
+    {xml && width ? <SvgXml xml={xml} width="100%" height={Math.round(Math.max(0, width - 24) / aspect)} preserveAspectRatio="none" /> : <Text style={styles.note}>{unavailableMessage}</Text>}
   </View>;
 }
 const styles = StyleSheet.create({

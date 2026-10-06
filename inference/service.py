@@ -5,7 +5,7 @@ import os
 import tempfile
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +35,7 @@ from inference.model import (
     predict_minutes,
     preprocess_signal,
 )
+from inference.xqrs_worker import chunk_windows, core_peaks, detect_xqrs_chunk
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,14 +48,23 @@ MODEL_NAME = "POSA SE-ResNet50-1D"
 MODEL_VERSION = "epoch-05"
 BUCKET = "ecg-files"
 BATCH_SIZE = 32
-FAILURE_MESSAGE = "Analysis failed. Check that the WFDB recording is valid, then retry."
 
 model = None
 device = None
 model_id: str | None = None
 admin: Client | None = None
+workers_ready = False
 worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="posa-inference")
+summary_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="posa-summary")
 cache_lock = threading.Lock()
+chart_lock = threading.Lock()
+prediction_jobs_lock = threading.Lock()
+queued_prediction_runs: list[str] = []
+running_prediction_runs: set[str] = set()
+summary_jobs_lock = threading.Lock()
+active_summary_runs: set[str] = set()
+queued_summary_runs: list[str] = []
+running_summary_runs: set[str] = set()
 signal_cache: OrderedDict[str, tuple[np.ndarray, str, str]] = OrderedDict()
 filtered_record_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 signal_feature_cache: OrderedDict[tuple[str, int, str], tuple[np.ndarray, np.ndarray, int | None]] = OrderedDict()
@@ -62,6 +72,7 @@ record_summary_cache: OrderedDict[str, tuple[tuple[str | None, str | None, str |
 annotation_cache: dict[str, tuple[tuple[str | None, str | None], np.ndarray, list[dict[str, float]], bool, bool, int, int]] = {}
 CACHE_RECORDS = 2
 FEATURE_CACHE_MINUTES = 24
+MAX_QRS_WORKERS = 2
 
 
 def _settings() -> tuple[str, str, str, str]:
@@ -338,20 +349,37 @@ def _set_upload_status(upload_id: str, status: str, duration_seconds: int | None
     _storage_client().table("ecg_uploads").update(update).eq("id", upload_id).execute()
 
 
+def _failure_message(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, str) and detail:
+        return detail
+    message = str(getattr(exc, "message", exc)).lower()
+    if "permission denied" in message or "42501" in message:
+        return "The model ran, but Supabase rejected saving its predictions. Check the service-role grants for prediction_runs and prediction_minutes."
+    if isinstance(exc, ValueError):
+        return str(exc)
+    return "Analysis failed while loading the ECG, running the model, or saving results. Check the inference service log and retry."
+
+
 def _process_run(run_id: str, study: dict[str, Any]) -> None:
     upload_id = study["id"]
     client = _storage_client()
     try:
         assert model is not None and device is not None
+        client.table("prediction_runs").update({
+            "status": "processing",
+            "progress_percent": 1,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", run_id).execute()
+        _set_upload_status(upload_id, "processing")
         signal, _, _ = _record_signal(study)
+        client.table("prediction_runs").update({"progress_percent": 2}).eq("id", run_id).execute()
         windows = preprocess_signal(signal)
         total = len(windows)
         duration_seconds = total * 60
         client.table("prediction_runs").update({
-            "status": "processing",
-            "progress_percent": 0,
+            "progress_percent": 4,
             "total_minutes": total,
-            "started_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
         _set_upload_status(upload_id, "processing", duration_seconds)
 
@@ -367,11 +395,12 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
                         "apnea_probability": float(probability),
                         "is_apnea": probability >= APNEA_THRESHOLD,
                     })
-                percent = min(95, int((start + len(probabilities)) * 95 / total))
+                percent = min(90, 4 + int((start + len(probabilities)) * 86 / total))
                 client.table("prediction_runs").update({"progress_percent": percent}).eq("id", run_id).execute()
 
         apnea_minutes = sum(row["is_apnea"] for row in minute_rows)
         apnea_percent = apnea_minutes * 100.0 / total
+        client.table("prediction_runs").update({"progress_percent": 95}).eq("id", run_id).execute()
         for start in range(0, len(minute_rows), 500):
             client.table("prediction_minutes").insert(minute_rows[start : start + 500]).execute()
         client.table("prediction_runs").update({
@@ -382,19 +411,199 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
             "apnea_percent": apnea_percent,
             "error_message": None,
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "summary_status": "queued",
+            "summary_progress_percent": 0,
+            "summary_stage": "Waiting for full-night ECG summary",
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+            "summary_error_message": None,
+            "summary_result": None,
         }).eq("id", run_id).execute()
         _set_upload_status(upload_id, "completed", duration_seconds)
+        _enqueue_summary(run_id, study)
     except Exception as exc:
         logger.exception("Inference failed for run %s (%s)", run_id, type(exc).__name__)
         try:
             client.table("prediction_runs").update({
                 "status": "failed",
-                "error_message": FAILURE_MESSAGE,
+                "error_message": _failure_message(exc),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
             _set_upload_status(upload_id, "failed")
         except Exception:
             logger.exception("Could not persist failure state for run %s", run_id)
+
+
+def _enqueue_prediction(run_id: str, study: dict[str, Any]) -> None:
+    with prediction_jobs_lock:
+        if run_id in queued_prediction_runs or run_id in running_prediction_runs:
+            return
+        queued_prediction_runs.append(run_id)
+    try:
+        worker.submit(_process_prediction_job, run_id, study)
+    except Exception:
+        with prediction_jobs_lock:
+            if run_id in queued_prediction_runs:
+                queued_prediction_runs.remove(run_id)
+        raise
+
+
+def _process_prediction_job(run_id: str, study: dict[str, Any]) -> None:
+    with prediction_jobs_lock:
+        if run_id in queued_prediction_runs:
+            queued_prediction_runs.remove(run_id)
+        running_prediction_runs.add(run_id)
+    try:
+        _process_run(run_id, study)
+    finally:
+        with prediction_jobs_lock:
+            running_prediction_runs.discard(run_id)
+
+
+def _enqueue_summary(
+    run_id: str,
+    study: dict[str, Any],
+    *,
+    reset_status: bool = False,
+) -> bool:
+    with summary_jobs_lock:
+        if run_id in active_summary_runs:
+            return False
+        active_summary_runs.add(run_id)
+        queued_summary_runs.append(run_id)
+    try:
+        if reset_status:
+            admin.table("prediction_runs").update({
+                "summary_status": "queued",
+                "summary_progress_percent": 0,
+                "summary_stage": "Queued for full-night ECG summary",
+                "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+                "summary_error_message": None,
+                "summary_result": None,
+            }).eq("id", run_id).execute()
+        summary_worker.submit(_process_summary, run_id, study)
+    except Exception:
+        with summary_jobs_lock:
+            active_summary_runs.discard(run_id)
+            if run_id in queued_summary_runs:
+                queued_summary_runs.remove(run_id)
+        raise
+    return True
+
+
+def _process_summary(run_id: str, study: dict[str, Any]) -> None:
+    client: Client | None = None
+    with summary_jobs_lock:
+        if run_id in queued_summary_runs:
+            queued_summary_runs.remove(run_id)
+        running_summary_runs.add(run_id)
+
+    def progress(stage: str, percent: int) -> None:
+        client.table("prediction_runs").update({
+            "summary_status": "processing",
+            "summary_stage": stage,
+            "summary_progress_percent": percent,
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", run_id).execute()
+        logger.info("Full-night summary progress run=%s stage=%s percent=%s", run_id, stage, percent)
+
+    try:
+        client = _storage_client()
+        progress("Loading full-night ECG", 5)
+        result = _build_record_summary(study["id"], study, progress)
+        client.table("prediction_runs").update({
+            "summary_status": "completed",
+            "summary_stage": "Full-night summary ready",
+            "summary_progress_percent": 100,
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+            "summary_error_message": None,
+            "summary_result": result,
+        }).eq("id", run_id).execute()
+        logger.info("Full-night summary completed run=%s", run_id)
+    except Exception as exc:
+        logger.exception("Full-night summary failed for run %s (%s)", run_id, type(exc).__name__)
+        if client is not None:
+            try:
+                client.table("prediction_runs").update({
+                    "summary_status": "failed",
+                    "summary_stage": "Full-night summary failed",
+                    "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+                    "summary_error_message": _failure_message(exc),
+                }).eq("id", run_id).execute()
+            except Exception:
+                logger.exception("Could not persist summary failure for run %s", run_id)
+    finally:
+        with summary_jobs_lock:
+            active_summary_runs.discard(run_id)
+            running_summary_runs.discard(run_id)
+
+
+def _recover_worker_queue() -> None:
+    """Resume jobs persisted as queued and fail jobs interrupted by a restart."""
+    client = _storage_client()
+    fields = "id, patient_id, clinician_id, record_code, storage_path, original_filename, sampling_rate_hz, duration_seconds, deleted_at"
+    try:
+        interrupted = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "processing").limit(100).execute().data or []
+        for run in interrupted:
+            client.table("prediction_runs").update({
+                "status": "failed",
+                "error_message": "The inference service restarted during this job. Retry the analysis.",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", run["id"]).execute()
+            client.table("ecg_uploads").update({"status": "failed"}).eq("id", run["ecg_upload_id"]).execute()
+
+        queued = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "queued").order("created_at").limit(100).execute().data or []
+        for run in queued:
+            response = client.table("ecg_uploads").select(fields).eq("id", run["ecg_upload_id"]).maybe_single().execute()
+            study = response.data
+            if not study or study.get("deleted_at"):
+                client.table("prediction_runs").update({
+                    "status": "failed",
+                    "error_message": "The uploaded study is unavailable. Upload it again to retry.",
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", run["id"]).execute()
+                continue
+            _enqueue_prediction(run["id"], study)
+        summaries = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "completed").in_("summary_status", ["queued", "processing"]).order("created_at").limit(100).execute().data or []
+        for run in summaries:
+            response = client.table("ecg_uploads").select(fields).eq("id", run["ecg_upload_id"]).maybe_single().execute()
+            study = response.data
+            if not study or study.get("deleted_at"):
+                client.table("prediction_runs").update({"summary_status": "failed", "summary_stage": "Study unavailable", "summary_updated_at": datetime.now(timezone.utc).isoformat(), "summary_error_message": "The uploaded study is unavailable."}).eq("id", run["id"]).execute()
+                continue
+            client.table("prediction_runs").update({"summary_status": "queued", "summary_stage": "Resuming full-night ECG summary", "summary_updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", run["id"]).execute()
+            _enqueue_summary(run["id"], study)
+        if interrupted or queued:
+            logger.info("Recovered inference queue: %s interrupted, %s queued", len(interrupted), len(queued))
+        if summaries:
+            logger.info("Recovered full-night ECG summaries: %s", len(summaries))
+    except Exception:
+        logger.exception("Could not recover persisted inference jobs at startup")
+
+
+def _detect_full_night_xqrs(
+    filtered_record: np.ndarray,
+    progress: Any | None = None,
+) -> np.ndarray:
+    windows = chunk_windows(len(filtered_record), SAMPLE_RATE_HZ)
+    if not windows:
+        return np.empty(0, dtype=np.int64)
+    max_workers = min(MAX_QRS_WORKERS, max(1, (os.cpu_count() or 1) - 1))
+    peaks_by_chunk: list[np.ndarray] = []
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for core_start, core_end, input_start, input_end in windows:
+            chunk = np.ascontiguousarray(filtered_record[input_start:input_end])
+            future = pool.submit(detect_xqrs_chunk, chunk, SAMPLE_RATE_HZ)
+            futures[future] = (core_start, core_end, input_start)
+        for completed, future in enumerate(as_completed(futures), 1):
+            core_start, core_end, input_start = futures[future]
+            peaks = core_peaks(future.result(), input_start, core_start, core_end)
+            if len(peaks):
+                peaks_by_chunk.append(peaks)
+            if progress:
+                percent = 38 + int(29 * completed / len(windows))
+                progress(f"Detecting R peaks ({completed}/{len(windows)} chunks)", min(67, percent))
+    return np.unique(np.concatenate(peaks_by_chunk)) if peaks_by_chunk else np.empty(0, dtype=np.int64)
 
 
 class torch_inference_context:
@@ -412,7 +621,7 @@ class torch_inference_context:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global model, device, admin, model_id
+    global model, device, admin, model_id, workers_ready
     model_path, supabase_url, _, service_key = _settings()
     model, device = load_model(model_path)
     admin = create_client(supabase_url, service_key)
@@ -425,9 +634,13 @@ async def lifespan(_: FastAPI):
         "is_active": True,
     }, on_conflict="name,version").execute()
     model_id = registered.data[0]["id"]
+    _recover_worker_queue()
+    workers_ready = True
     logger.info("Loaded %s %s on %s", MODEL_NAME, MODEL_VERSION, device)
     yield
+    workers_ready = False
     worker.shutdown(wait=False, cancel_futures=True)
+    summary_worker.shutdown(wait=False, cancel_futures=True)
 
 
 app = FastAPI(title="POSA ECG Inference", version="1.0.0", lifespan=lifespan)
@@ -447,6 +660,97 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str | bool]:
     return {"ok": model is not None and admin is not None, "model": MODEL_NAME, "version": MODEL_VERSION}
+
+
+@app.get("/v1/health")
+def detailed_health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    client = _storage_client()
+    try:
+        if client.auth.get_user(token).user is None:
+            raise HTTPException(status_code=401, detail="Your session expired. Sign in again.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.info("Server status auth check failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=401, detail="Could not validate your session with Supabase.") from exc
+
+    database_error = None
+    try:
+        client.table("prediction_runs").select("id").limit(1).execute()
+    except Exception as exc:
+        database_error = type(exc).__name__
+        logger.exception("Server status Supabase check failed (%s)", database_error)
+
+    with prediction_jobs_lock:
+        prediction_queued = len(queued_prediction_runs)
+        prediction_running = len(running_prediction_runs)
+    with summary_jobs_lock:
+        summary_queued = len(queued_summary_runs)
+        summary_running = len(running_summary_runs)
+
+    model_loaded = model is not None
+    return {
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "ok": workers_ready and model_loaded and database_error is None,
+        "api": {"ok": True, "version": "1.0.0"},
+        "model": {"ok": model_loaded, "name": MODEL_NAME, "version": MODEL_VERSION, "device": str(device) if device is not None else None},
+        "supabase": {"ok": database_error is None, "error": database_error},
+        "predictionWorker": {"ok": workers_ready, "queued": prediction_queued, "running": prediction_running, "workers": 1},
+        "summaryWorker": {"ok": workers_ready, "queued": summary_queued, "running": summary_running, "workers": 1},
+    }
+
+
+@app.get("/v1/studies/{upload_id}/diagnostics")
+def study_diagnostics(upload_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    _authorized_study(upload_id, token)
+    client = _storage_client()
+    try:
+        runs = client.table("prediction_runs").select(
+            "id,status,progress_percent,error_message,summary_status,summary_progress_percent,summary_stage,summary_error_message,summary_updated_at"
+        ).eq("ecg_upload_id", upload_id).order("created_at", desc=True).limit(1).execute().data or []
+    except Exception as exc:
+        logger.exception("Could not read study diagnostics (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail=f"Supabase diagnostics query failed ({type(exc).__name__}).") from exc
+
+    run = runs[0] if runs else None
+    run_id = run["id"] if run else None
+    with summary_jobs_lock:
+        queued_count = len(queued_summary_runs)
+        running_count = len(running_summary_runs)
+        queue_position = queued_summary_runs.index(run_id) + 1 if run_id in queued_summary_runs else None
+        if run_id in running_summary_runs:
+            local_summary_state = "running"
+        elif run_id in queued_summary_runs:
+            local_summary_state = "queued"
+        elif run and run.get("summary_status") in {"queued", "processing"}:
+            local_summary_state = "not_registered"
+        else:
+            local_summary_state = "idle"
+
+    return {
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "service": {"modelLoaded": model is not None, "databaseConfigured": admin is not None, "model": MODEL_NAME, "version": MODEL_VERSION},
+        "run": ({
+            "id": run_id,
+            "status": run.get("status"),
+            "progressPercent": run.get("progress_percent"),
+            "error": run.get("error_message"),
+            "summaryStatus": run.get("summary_status"),
+            "summaryProgressPercent": run.get("summary_progress_percent"),
+            "summaryStage": run.get("summary_stage"),
+            "summaryError": run.get("summary_error_message"),
+            "summaryUpdatedAt": run.get("summary_updated_at"),
+        } if run else None),
+        "summaryWorker": {
+            "configuredWorkers": 1,
+            "runningJobs": running_count,
+            "queuedJobs": queued_count,
+            "runState": local_summary_state,
+            "queuePosition": queue_position,
+        },
+    }
 
 
 @app.post("/v1/studies/{upload_id}/analysis", status_code=202)
@@ -471,7 +775,7 @@ def start_analysis(upload_id: str, authorization: str | None = Header(default=No
     }).execute()
     run_id = inserted.data[0]["id"]
     _set_upload_status(upload_id, "processing")
-    worker.submit(_process_run, run_id, study)
+    _enqueue_prediction(run_id, study)
     return {"runId": run_id, "status": "queued"}
 
 
@@ -516,15 +820,122 @@ def get_signal_minute(
     }
 
 
+@app.get("/v1/studies/{upload_id}/timeline")
+def get_study_timeline(
+    upload_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    study = _authorized_study(upload_id, token)
+    runs = _storage_client().table("prediction_runs").select("id,total_minutes,status").eq(
+        "ecg_upload_id", upload_id
+    ).eq("status", "completed").order("created_at", desc=True).limit(1).execute().data or []
+    if not runs:
+        raise HTTPException(status_code=409, detail="Model predictions are not ready yet.")
+    run = runs[0]
+    rows = _storage_client().table("prediction_minutes").select("minute_index,is_apnea").eq(
+        "run_id", run["id"]
+    ).order("minute_index").execute().data or []
+    duration = max(1, int(run.get("total_minutes") or study.get("duration_seconds", 60) // 60)) * 60
+    palette = {"bg": "#12283A", "text": "#D9EAF2", "muted": "#9FB8C8", "grid": "#385367", "apnea": "#F16A78"}
+    with chart_lock:
+        fig = Figure(figsize=(18, 1.6), dpi=120, facecolor=palette["bg"])
+        FigureCanvasSVG(fig)
+        ax = fig.subplots()
+        ax.set_facecolor(palette["bg"])
+        ax.set_xlim(0, duration); ax.set_ylim(0, 1)
+        for row in rows:
+            if row.get("is_apnea"):
+                start = max(0, int(row["minute_index"])) * 60
+                ax.axvspan(start, min(duration, start + 60), ymin=.25, ymax=.76, color=palette["apnea"], alpha=.86)
+        ticks = np.linspace(0, duration, min(7, max(2, int(duration / 3600) + 1)))
+        ax.set_xticks(ticks, [f"{int(x//3600):02d}:{int(x%3600//60):02d}:{int(x%60):02d}" for x in ticks])
+        ax.tick_params(axis="x", colors=palette["muted"], labelsize=9, length=0, pad=5)
+        ax.set_yticks([])
+        ax.grid(axis="x", color=palette["grid"], linewidth=.6)
+        ax.spines[["top", "right", "left"]].set_visible(False)
+        ax.spines["bottom"].set_color(palette["grid"])
+        output = StringIO()
+        fig.savefig(output, format="svg", metadata={"Date": None}, facecolor=palette["bg"], bbox_inches="tight", pad_inches=.08)
+        markup = output.getvalue()
+    return {
+        "uploadId": upload_id,
+        "runId": run["id"],
+        "durationSeconds": duration,
+        "source": "model_prediction",
+        "svg": markup[markup.find("<svg"):],
+    }
+
+
+@app.post("/v1/studies/{upload_id}/summary")
+def start_study_summary(
+    upload_id: str,
+    refresh: bool = Query(default=False),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    study = _authorized_study(upload_id, token)
+    client = _storage_client()
+    runs = client.table("prediction_runs").select("id,status,summary_status,summary_progress_percent,summary_stage,summary_error_message").eq(
+        "ecg_upload_id", upload_id
+    ).eq("status", "completed").order("created_at", desc=True).limit(1).execute().data or []
+    if not runs:
+        raise HTTPException(status_code=409, detail="Model predictions are not ready yet.")
+    run = runs[0]
+    state = run.get("summary_status") or "not_started"
+    if refresh or state in {"failed", "not_started", "queued", "processing"}:
+        queued = _enqueue_summary(run["id"], study, reset_status=True)
+        if queued:
+            state = "queued"
+            run = {
+                **run,
+                "summary_progress_percent": 0,
+                "summary_stage": "Queued for full-night ECG summary",
+                "summary_error_message": None,
+            }
+        else:
+            # Another request already owns this run. Return its live persisted stage
+            # instead of resetting a running job back to the queued state.
+            current = client.table("prediction_runs").select(
+                "id,status,summary_status,summary_progress_percent,summary_stage,summary_error_message"
+            ).eq("id", run["id"]).limit(1).execute().data or []
+            if current:
+                run = current[0]
+                state = run.get("summary_status") or state
+    return {
+        "runId": run["id"], "status": state,
+        "progressPercent": run.get("summary_progress_percent") or 0,
+        "stage": run.get("summary_stage"), "error": run.get("summary_error_message"),
+    }
+
+
 @app.get("/v1/studies/{upload_id}/summary")
 def get_study_summary(
     upload_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     token = _bearer_token(authorization)
-    study = _authorized_study(upload_id, token)
+    _authorized_study(upload_id, token)
+    runs = _storage_client().table("prediction_runs").select("summary_status,summary_result,summary_error_message").eq(
+        "ecg_upload_id", upload_id
+    ).eq("status", "completed").order("created_at", desc=True).limit(1).execute().data or []
+    if not runs:
+        raise HTTPException(status_code=409, detail="Model predictions are not ready yet.")
+    run = runs[0]
+    if run.get("summary_status") == "completed" and isinstance(run.get("summary_result"), dict):
+        return run["summary_result"]
+    detail = run.get("summary_error_message") if run.get("summary_status") == "failed" else "The full-night ECG summary is still processing."
+    raise HTTPException(status_code=409, detail=detail)
+
+
+def _build_record_summary(
+    upload_id: str,
+    study: dict[str, Any],
+    progress: Any | None = None,
+) -> dict[str, Any]:
     signal, lead, unit = _record_signal(study)
     duration = len(signal) / SAMPLE_RATE_HZ
+    if progress: progress("Filtering ECG and reading annotations", 18)
     filtered_record = _filtered_record(upload_id, signal)
     annotated_peaks, apnea_intervals, apnea_available, qrs_available, labelled_minutes, apnea_minutes = _record_annotations(
         study, duration, filtered_record
@@ -549,12 +960,14 @@ def get_study_summary(
 
     peaks = annotated_peaks
     if peaks is None:
+        if progress: progress("Detecting R peaks for HR/HRV (full-night step)", 38)
         try:
-            peaks = np.asarray(processing.xqrs_detect(filtered_record, fs=SAMPLE_RATE_HZ, verbose=False), dtype=np.int64)
+            peaks = _detect_full_night_xqrs(filtered_record, progress)
             peaks = _refine_r_peaks(filtered_record, peaks)
         except Exception as exc:
-            logger.info("Whole-record QRS detection unavailable for %s (%s)", upload_id, type(exc).__name__)
-            peaks = np.empty(0, dtype=np.int64)
+            logger.exception("Chunked XQRS detection failed for %s (%s)", upload_id, type(exc).__name__)
+            raise RuntimeError("Full-night R-peak detection failed. Retry the summary after checking the inference server.") from exc
+    if progress: progress("Calculating heart-rate and HRV statistics", 68)
     heart_rate_by_minute: list[dict[str, float | int]] = []
     for minute in range((len(signal) + WINDOW_SAMPLES - 1) // WINDOW_SAMPLES):
         start = minute * WINDOW_SAMPLES
@@ -697,7 +1110,9 @@ def get_study_summary(
             "rrHistogramSvg": svg_chart(rr_chart, palette, figsize=(8, 3.4)),
         }
 
-    charts = {"screen": render_charts(palettes["screen"]), "print": render_charts(palettes["print"])}
+    if progress: progress("Rendering report charts", 88)
+    with chart_lock:
+        charts = {"screen": render_charts(palettes["screen"]), "print": render_charts(palettes["print"])}
     threshold_minutes = sum(hard_positive)
     probability_weighted_minutes = sum(probabilities)
     runs = sum(positive and (i == 0 or model_minutes[i - 1]["minute_index"] != model_minutes[i]["minute_index"] - 1 or not hard_positive[i - 1]) for i, positive in enumerate(hard_positive))

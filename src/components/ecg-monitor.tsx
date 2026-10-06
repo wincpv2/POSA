@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { Gesture, GestureDetector, type GestureStateChangeEvent, type PanGestureHandlerEventPayload, type PinchGestureHandlerEventPayload } from 'react-native-gesture-handler';
 import Svg, { Circle, Line, Path, Rect, SvgXml, Text as SvgText } from 'react-native-svg';
 import { AppButton, PosaText as Text, pressX } from '@/components/posa-ui';
@@ -412,11 +412,15 @@ type OverviewProps = {
   viewSeconds: number;
   timelineHeight?: number;
   overviewSvg?: string;
+  loading?: boolean;
   onSeek: (seconds: number) => void;
 };
 
-export function RecordingOverview({ duration, playheadSec, viewStartSec, viewSeconds, timelineHeight = 132, overviewSvg, onSeek }: OverviewProps) {
+export function RecordingOverview({ duration, playheadSec, viewStartSec, viewSeconds, timelineHeight = 132, overviewSvg, loading = false, onSeek }: OverviewProps) {
   const [overviewWidth, setOverviewWidth] = useState(0);
+  const [progress] = useState(() => new Animated.Value(0));
+  const progressWidth = Math.min(280, Math.max(60, overviewWidth));
+  const progressSegment = progressWidth * 0.3;
   const safeDuration = finite(duration) && duration > 0 ? duration : 1;
   const safePlayhead = finite(playheadSec) ? clamp(playheadSec, 0, safeDuration) : 0;
   const safeViewSeconds = finite(viewSeconds) && viewSeconds > 0 ? viewSeconds : Math.min(10, safeDuration);
@@ -429,8 +433,25 @@ export function RecordingOverview({ duration, playheadSec, viewStartSec, viewSec
     if (x != null && overviewWidth > 0) onSeek(clamp(x / overviewWidth * safeDuration, 0, safeDuration));
   };
 
+  useEffect(() => {
+    if (!loading) return;
+    const animation = Animated.loop(Animated.timing(progress, {
+      toValue: 1,
+      duration: 1300,
+      easing: Easing.linear,
+      useNativeDriver: Platform.OS !== 'web',
+    }));
+    animation.start();
+    return () => animation.stop();
+  }, [loading, progress]);
+
   return <Pressable accessibilityRole="button" accessibilityLabel="Full recording timeline. Tap to seek to that point." onLayout={(event) => setOverviewWidth(event.nativeEvent.layout.width)} onPress={onPress} style={[styles.timeline, { height: timelineHeight }]}>
-    {overviewSvg ? <SvgXml xml={overviewSvg} width="100%" height={timelineHeight} preserveAspectRatio="none" /> : <View style={[styles.overviewPlaceholder, { height: timelineHeight }]}><Text style={styles.chartMessage}>Loading Python timeline…</Text></View>}
+    {overviewSvg ? <SvgXml xml={overviewSvg} width="100%" height={timelineHeight} preserveAspectRatio="none" /> : <View pointerEvents="none" style={[styles.overviewPlaceholder, { height: timelineHeight }]}>
+      <Text style={styles.chartMessage}>{loading ? 'Loading Python timeline…' : 'Python timeline unavailable.'}</Text>
+      {loading ? <View accessibilityRole="progressbar" accessibilityLabel="Loading Python timeline" style={[styles.progressTrack, { width: progressWidth }]}>
+        <Animated.View style={[styles.progressSegment, { width: progressSegment, transform: [{ translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [-progressSegment, progressWidth] }) }] }]} />
+      </View> : null}
+    </View>}
     <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width="100%" height={timelineHeight} viewBox="0 0 1000 132" preserveAspectRatio="none">
       <Rect x={clamp(playheadX - 1, 0, 998)} y={18} width={2} height={72} fill="#F4F7F7" />
       <Rect x={viewX} y={18} width={viewWidth} height={72} fill="#49E3A0" fillOpacity={0.08} stroke="#20b781" strokeWidth={1.5} />
@@ -448,4 +469,6 @@ const styles = StyleSheet.create({
   link: { color: '#D7E9E9', fontSize: 14, fontWeight: '700' },
   timeline: { width: '100%', height: 132, borderRadius: 6, overflow: 'hidden', position: 'relative' },
   overviewPlaceholder: { height: 132, justifyContent: 'center', alignItems: 'center' },
+  progressTrack: { height: 6, overflow: 'hidden', borderRadius: 99, backgroundColor: '#29454B' },
+  progressSegment: { height: 6, borderRadius: 99, backgroundColor: '#49E3A0' },
 });

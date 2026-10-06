@@ -2,7 +2,7 @@
   "expo": {
     "name": "POSA",
     "slug": "posa-app",
-    "version": "1.0.1",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "posaapp",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.posa.sleepapp",
-      "versionCode": 2,
+      "versionCode": 5,
       "adaptiveIcon": {
         "backgroundColor": "#1BA3CC",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

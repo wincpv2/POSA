@@ -6,6 +6,8 @@ import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
 import { colors, fonts } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
+import { cancelOfflineSignalDownloads } from '@/lib/inference';
+import { clearStudyOfflineCache, readRecentUploadsCache, removeRecentUploadFromCache, writeRecentUploadsCache } from '@/lib/offline-cache';
 import { getDeletionLog, listRecentEcgUploads, restoreEcgUpload, softDeleteEcgUpload, timeAgo, type DeletionLogEntry, type RecentEcgUpload } from '@/lib/queries';
 
 type StudyStatus = 'Awaiting analysis' | 'Processing' | 'Analysis complete' | 'Failed';
@@ -39,6 +41,7 @@ export default function HomeScreen() {
   const [records, setRecords] = useState<StudyRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [showingOfflineRecords, setShowingOfflineRecords] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<(typeof filterLabels)[number]>('All');
 
@@ -58,12 +61,36 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    listRecentEcgUploads(50)
-      .then((rows) => { if (!cancelled) { setRecords(rows.map(toRecord)); setLoadError(''); } })
-      .catch((reason) => { if (!cancelled) setLoadError(reason instanceof Error ? reason.message : 'Could not load studies.'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    const load = async () => {
+      const cached = myId ? await readRecentUploadsCache(myId).catch(() => null) : null;
+      if (cancelled) return;
+      if (cached) {
+        setRecords(cached.map(toRecord));
+        setLoadError('');
+        setShowingOfflineRecords(true);
+        setLoading(false);
+      }
+      try {
+        const rows = await listRecentEcgUploads(50);
+        if (cancelled) return;
+        setRecords(rows.map(toRecord));
+        setLoadError('');
+        setShowingOfflineRecords(false);
+        if (myId) void writeRecentUploadsCache(myId, rows).catch(() => {});
+      } catch (reason) {
+        if (!cancelled) {
+          if (!cached) {
+            setLoadError(reason instanceof Error ? reason.message : 'Could not load studies.');
+            setShowingOfflineRecords(false);
+          }
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
     return () => { cancelled = true; };
-  }, [reloadKey]);
+  }, [reloadKey, myId]);
 
   const messageOf = (reason: unknown, fallback: string) => typeof reason === 'object' && reason && 'message' in reason ? String(reason.message) : fallback;
   const remove = async (record: StudyRecord) => {
@@ -73,6 +100,9 @@ export default function HomeScreen() {
     setActionError('');
     try {
       await softDeleteEcgUpload(upload.id);
+      if (myId) cancelOfflineSignalDownloads(myId, upload.id);
+      if (myId) await clearStudyOfflineCache(myId, upload.id).catch(() => {});
+      if (myId) await removeRecentUploadFromCache(myId, upload.id).catch(() => {});
       setRecords((rows) => rows.filter((row) => row.upload?.id !== upload.id));
       setDeleted({ id: upload.id, code: record.id });
       setLogKey((k) => k + 1);
@@ -105,7 +135,7 @@ export default function HomeScreen() {
       age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '',
       metadata: 'Private WFDB recording', status, progress: run?.progress_percent ?? 0,
       reportStatus: 'Draft', uploadId: upload.id, patientId: upload.patientId,
-      durationSeconds: upload.durationSeconds ?? 0, runId: run?.id ?? null, errorMessage: run?.error_message ?? '',
+      durationSeconds: upload.durationSeconds ?? (run?.total_minutes ?? 0) * 60, runId: run?.id ?? null, errorMessage: run?.error_message ?? '',
     });
     router.push(status === 'ready' ? '/detail' : '/processing');
   };
@@ -115,7 +145,7 @@ export default function HomeScreen() {
 
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <View style={[styles.greetingRow, wide && styles.greetingRowWide]}>
-      <View style={styles.greeting}><Text style={styles.title}>Welcome, {displayName}</Text><Text style={styles.copy}>{loading ? 'Loading your studies…' : `${records.length} stored ${records.length === 1 ? 'study' : 'studies'} · ${awaiting} awaiting analysis`}</Text></View>
+      <View style={styles.greeting}><Text style={styles.title}>Welcome, {displayName}</Text><Text style={styles.copy}>{loading ? 'Loading your studies…' : `${records.length} stored ${records.length === 1 ? 'study' : 'studies'} · ${awaiting} awaiting analysis`}</Text>{showingOfflineRecords ? <Text style={styles.subCopy}>Showing studies saved on this device; their latest status may be out of date.</Text> : null}</View>
       <View style={[styles.searchActions, wide && styles.searchActionsWide]}>
         <TextInput value={query} onChangeText={setQuery} placeholder="Search study ID" placeholderTextColor={colors.muted} style={styles.search} accessibilityLabel="Search study ID" />
         <Pressable accessibilityRole="button" onPress={beginNew} style={styles.secondaryStart}><Text style={styles.secondaryStartText}>+ Start new study</Text></Pressable>

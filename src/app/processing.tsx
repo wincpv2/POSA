@@ -1,16 +1,60 @@
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
-import { startStudyAnalysis } from '@/lib/inference';
-import { getLatestPredictionRun } from '@/lib/queries';
+import { useAuth } from '@/lib/auth-context';
+import { getRecordTimelineCached, getSignalMinuteCached, getStudyDiagnostics, startRecordSummary, startStudyAnalysis, type StudyDiagnostics } from '@/lib/inference';
+import { writeRecentUploadsCache, writeStudyReviewCache } from '@/lib/offline-cache';
+import { getLatestPredictionRun, getStudyReport, listPredictionMinutes, listRecentEcgUploads, type PredictionRun } from '@/lib/queries';
+
+type DiagnosticLogEntry = { time: string; message: string };
+
+function ageSince(timestamp: string | null | undefined) {
+  if (!timestamp) return 'not recorded';
+  const date = Date.parse(timestamp);
+  if (!Number.isFinite(date)) return 'invalid timestamp';
+  const seconds = Math.max(0, Math.floor((Date.now() - date) / 1000));
+  return seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ${seconds % 60}s ago`;
+}
 
 export default function ProcessingScreen() {
-  const { study, update } = useUploadState();
+  const { study, update, offlineDownload, retryOfflineDownload } = useUploadState();
+  const { session } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(study.errorMessage);
+  const [monitorError, setMonitorError] = useState('');
+  const [run, setRun] = useState<PredictionRun | null>(null);
+  const [diagnostics, setDiagnostics] = useState<StudyDiagnostics | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState('');
+  const [diagnosticConnection, setDiagnosticConnection] = useState<'checking' | 'reachable' | 'unreachable' | 'response-error'>('checking');
+  const [diagnosticLog, setDiagnosticLog] = useState<DiagnosticLogEntry[]>([]);
+  const [timelineState, setTimelineState] = useState<'waiting' | 'loading' | 'ready' | 'failed'>('waiting');
+  const [signalState, setSignalState] = useState<'waiting' | 'loading' | 'ready' | 'failed'>('waiting');
+  const missingRunSince = useRef<number | null>(null);
+  const statusErrorSince = useRef<number | null>(null);
+  const timelineRun = useRef('');
+  const summaryRun = useRef('');
+  const recentCacheRun = useRef('');
+  const reviewCacheRun = useRef('');
+  const diagnosticKeys = useRef(new Set<string>());
+  const userId = session?.user.id;
+
+  const logDiagnostic = useCallback((key: string, message: string) => {
+    if (diagnosticKeys.current.has(key)) return;
+    diagnosticKeys.current.add(key);
+    if (diagnosticKeys.current.size > 200) diagnosticKeys.current.delete(diagnosticKeys.current.values().next().value!);
+    setDiagnosticLog((items) => [{ time: new Date().toLocaleTimeString(), message }, ...items].slice(0, 30));
+  }, []);
+
+  const loadDetailData = useCallback((uploadId: string, runId: string) => {
+    if (!userId) return;
+    setSignalState('loading');
+    setTimelineState('loading');
+    getSignalMinuteCached(uploadId, 0, 'raw', runId, userId).then(() => setSignalState('ready')).catch(() => setSignalState('failed'));
+    getRecordTimelineCached(uploadId, runId, userId).then(() => setTimelineState('ready')).catch(() => setTimelineState('failed'));
+  }, [userId]);
 
   useEffect(() => {
     if (!study.uploadId) {
@@ -18,31 +62,126 @@ export default function ProcessingScreen() {
       return;
     }
     let cancelled = false;
+    let refreshing = false;
     const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
         const run = await getLatestPredictionRun(study.uploadId!);
-        if (!run || cancelled) return;
+        if (cancelled) return;
+        if (!run) {
+          logDiagnostic('prediction:no-run', 'Supabase status query succeeded, but no prediction run is visible for this upload.');
+          statusErrorSince.current = null;
+          missingRunSince.current ??= Date.now();
+          if (Date.now() - missingRunSince.current >= 20_000) {
+            setMonitorError('No analysis job is visible for this upload yet. Check the connection and retry if this message remains.');
+          }
+          if (Date.now() - missingRunSince.current >= 60_000) {
+            const message = 'The inference worker did not create an analysis job. Check that the service is online, then retry.';
+            setError(message);
+            update({ status: 'failed', errorMessage: message });
+          }
+          return;
+        }
+        missingRunSince.current = null;
+        statusErrorSince.current = null;
+        setMonitorError('');
+        setRun(run);
+        logDiagnostic(`prediction:${run.id}:${run.status}:${run.progress_percent}`, `Prediction run ${run.id.slice(0, 8)}: ${run.status}, ${run.progress_percent}%.`);
+        logDiagnostic(`summary:${run.id}:${run.summary_status}:${run.summary_progress_percent}:${run.summary_stage}`, `Full-night summary: ${run.summary_status}, ${run.summary_progress_percent}%, stage=${run.summary_stage || 'not set'}.`);
         update({
           runId: run.id,
           progress: run.progress_percent,
           durationSeconds: (run.total_minutes ?? 0) * 60,
-          status: run.status === 'completed' ? 'ready' : run.status === 'failed' ? 'failed' : 'processing',
+          status: run.status === 'completed' ? 'ready' : run.status === 'failed' ? 'failed' : run.status,
           errorMessage: run.error_message ?? '',
         });
         setError(run.error_message ?? '');
+        if (run.status === 'completed') {
+          if (userId && reviewCacheRun.current !== run.id) {
+            reviewCacheRun.current = run.id;
+            void Promise.all([listPredictionMinutes(run.id), getStudyReport(study.uploadId!)]).then(([minutes, report]) =>
+              writeStudyReviewCache(userId, study.uploadId!, { run, minutes, reportStatus: report.status }),
+            ).catch(() => {});
+          }
+          if (userId && recentCacheRun.current !== run.id) {
+            recentCacheRun.current = run.id;
+            void listRecentEcgUploads(50).then((uploads) => writeRecentUploadsCache(userId, uploads)).catch(() => {});
+          }
+          if (timelineRun.current !== run.id) {
+            timelineRun.current = run.id;
+            loadDetailData(study.uploadId!, run.id);
+          }
+          if (run.summary_status === 'not_started' && summaryRun.current !== run.id) {
+            summaryRun.current = run.id;
+            void startRecordSummary(study.uploadId!).catch(() => { summaryRun.current = ''; });
+          }
+        }
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Could not read analysis status.');
+        if (cancelled) return;
+        const message = reason instanceof Error ? reason.message : 'Could not read analysis status.';
+        logDiagnostic(`status-error:${message}`, `Supabase prediction status poll failed: ${message}`);
+        setMonitorError(`Status check failed: ${message}. Retrying automatically.`);
+        statusErrorSince.current ??= Date.now();
+        if (Date.now() - statusErrorSince.current >= 60_000) {
+          const timeoutMessage = 'Could not reach the status database for 60 seconds. Check the connection, then retry analysis.';
+          setError(timeoutMessage);
+          update({ status: 'failed', errorMessage: timeoutMessage });
+        }
+      } finally {
+        refreshing = false;
       }
     };
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [study.uploadId, update]);
+  }, [study.uploadId, update, loadDetailData, userId, logDiagnostic]);
+
+  useEffect(() => {
+    if (!study.uploadId) return;
+    let cancelled = false;
+    let refreshing = false;
+    const refreshDiagnostics = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const next = await getStudyDiagnostics(study.uploadId!, controller.signal);
+        if (cancelled) return;
+        setDiagnostics(next);
+        setDiagnosticError('');
+        setDiagnosticConnection('reachable');
+        logDiagnostic(`service:${next.service.modelLoaded}:${next.service.databaseConfigured}`, `Inference API reachable; Supabase diagnostics query succeeded; model loaded=${next.service.modelLoaded}; database configured=${next.service.databaseConfigured}; ${next.service.version}.`);
+        if (next.run) {
+          logDiagnostic(`summary-heartbeat:${next.run.summaryStatus}:${next.run.summaryStage}:${next.run.summaryProgressPercent}:${next.run.summaryUpdatedAt}`, `Summary DB state=${next.run.summaryStatus}; stage=${next.run.summaryStage || 'not set'}; progress=${next.run.summaryProgressPercent}%; last DB update=${ageSince(next.run.summaryUpdatedAt)}.`);
+        }
+        const worker = next.summaryWorker;
+        logDiagnostic(`worker:${worker.runState}:${worker.queuePosition}:${worker.queuedJobs}:${worker.runningJobs}`, `Local summary worker: this run=${worker.runState}${worker.queuePosition ? ` at queue position ${worker.queuePosition}` : ''}; running=${worker.runningJobs}; queued=${worker.queuedJobs}; workers=${worker.configuredWorkers}.`);
+      } catch (reason) {
+        if (cancelled) return;
+        const message = controller.signal.aborted ? 'Inference diagnostics request timed out after 12 seconds.' : reason instanceof Error ? reason.message : 'Unknown diagnostics request error.';
+        const networkFailure = controller.signal.aborted || reason instanceof TypeError || /failed to fetch|network request failed|load failed/i.test(message);
+        setDiagnosticConnection(networkFailure ? 'unreachable' : 'response-error');
+        setDiagnosticError(message);
+        logDiagnostic(`diagnostics-error:${message}`, `Inference diagnostics request failed: ${message}`);
+      } finally {
+        clearTimeout(timeout);
+        refreshing = false;
+      }
+    };
+    void refreshDiagnostics();
+    const timer = setInterval(() => { void refreshDiagnostics(); }, 10_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [study.uploadId, logDiagnostic]);
 
   const retry = async () => {
     if (!study.uploadId) return;
     setBusy(true);
     setError('');
+    setMonitorError('');
+    missingRunSince.current = null;
+    statusErrorSince.current = null;
     try {
       const run = await startStudyAnalysis(study.uploadId);
       update({ runId: run.runId, status: run.status === 'completed' ? 'ready' : 'processing', progress: 0, errorMessage: '' });
@@ -55,19 +194,62 @@ export default function ProcessingScreen() {
     }
   };
 
-  const done = study.status === 'ready';
+  const retrySummary = async () => {
+    if (!study.uploadId || !run) return;
+    try { await startRecordSummary(study.uploadId, true); } catch (reason) {
+      setMonitorError(reason instanceof Error ? reason.message : 'Could not restart the ECG summary.');
+    }
+  };
+
+  const prerequisiteLabel = (state: 'waiting' | 'loading' | 'ready' | 'failed') => state === 'ready' ? 'ready' : state === 'loading' ? 'loading' : state === 'failed' ? 'unavailable' : 'waiting';
+
+  const done = run?.status === 'completed' || study.status === 'ready';
   const processing = study.status === 'queued' || study.status === 'processing';
+  const activeOfflineDownload = offlineDownload.uploadId === study.uploadId && offlineDownload.runId === run?.id;
+  const offlineProgressPercent = offlineDownload.totalMinutes > 0
+    ? Math.floor((offlineDownload.rawMinutes + offlineDownload.filteredMinutes) / (offlineDownload.totalMinutes * 2) * 100)
+    : 0;
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY WORKFLOW" title={done ? 'Analysis complete' : processing ? 'Analyzing ECG recording' : 'Analysis needs attention'} description="The model classifies complete one-minute ECG windows. Progress and results come from the inference service." />
     <GlassPanel style={styles.panel}>
       <Text style={styles.heading}>{study.studyId} · {study.fileName}</Text>
       <Text style={styles.copy}>{study.sampleRate} Hz · {study.lead || 'First ECG channel'} · {study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''}</Text>
-      {processing ? <><View style={styles.progressRow}><ActivityIndicator color={colors.accent} /><Text style={styles.copy}>{study.status === 'queued' ? 'Waiting for the inference worker' : `Analyzing · ${study.progress}%`}</Text></View><View style={styles.track}><View style={[styles.fill, { width: `${study.progress}%` }]} /></View></> : null}
+      {processing ? <><View style={styles.progressRow}><ActivityIndicator color={colors.accent} /><Text style={styles.copy}>{study.status === 'queued' ? 'Waiting for the inference worker' : study.progress <= 1 ? 'Loading ECG recording' : study.progress <= 4 ? 'Preparing one-minute ECG windows' : study.progress >= 95 ? `Saving predictions · ${study.progress}%` : `Running model inference · ${study.progress}%`}</Text></View><View style={styles.track}><View style={[styles.fill, { width: `${study.progress}%` }]} /></View>{monitorError ? <Text accessibilityRole="alert" style={styles.error}>{monitorError}</Text> : null}</> : null}
       {done ? <Text style={styles.copy}>Predictions are saved and ready for clinician review.</Text> : null}
+      {done ? <View style={styles.secondaryWork}>
+        <Text style={styles.heading}>Full-night ECG summary</Text>
+        {run?.summary_status === 'completed' ? <Text style={styles.copy}>Ready · HR, HRV, and report charts are available.</Text>
+          : run?.summary_status === 'failed' ? <><Text accessibilityRole="alert" style={styles.error}>{run.summary_error_message || 'Full-night summary failed.'}</Text><AppButton compact variant="quiet" onPress={() => { void retrySummary(); }}><Text style={styles.link}>Retry summary</Text></AppButton></>
+            : <><Text style={styles.copy}>{run?.summary_stage || 'Starting full-night summary'} · {run?.summary_progress_percent ?? 0}%</Text><View accessibilityRole="progressbar" accessibilityLabel="Full-night ECG summary progress" style={styles.track}><View style={[styles.fillSecondary, { width: `${run?.summary_progress_percent ?? 0}%` }]} /></View></>}
+        <Text style={styles.copy}>ECG signal: {prerequisiteLabel(signalState)} · Python timeline: {prerequisiteLabel(timelineState)}</Text>
+        {(signalState === 'failed' || timelineState === 'failed') && run?.id ? <AppButton compact variant="quiet" onPress={() => loadDetailData(study.uploadId!, run.id)}><Text style={styles.link}>Retry signal and timeline</Text></AppButton> : null}
+        {activeOfflineDownload ? <View style={styles.offlineBlock}>
+          <Text style={styles.heading}>Offline ECG download</Text>
+          {offlineDownload.status === 'ready'
+            ? <Text style={styles.copy}>Ready for offline playback · 100%</Text>
+            : offlineDownload.status === 'failed'
+              ? <><Text accessibilityRole="alert" style={styles.error}>Download stopped at {offlineProgressPercent}%: {offlineDownload.error}</Text><AppButton compact variant="quiet" onPress={retryOfflineDownload}><Text style={styles.link}>Resume download</Text></AppButton></>
+              : <><Text style={styles.copy}>{offlineDownload.status === 'checking' ? 'Checking saved ECG' : `Saving ECG · ${offlineProgressPercent}%`} · Filtered {offlineDownload.filteredMinutes}/{offlineDownload.totalMinutes} min · Raw {offlineDownload.rawMinutes}/{offlineDownload.totalMinutes} min</Text><View accessibilityRole="progressbar" accessibilityLabel={`Offline ECG download ${offlineProgressPercent}%`} style={styles.track}><View style={[styles.fillSecondary, { width: `${offlineProgressPercent}%` }]} /></View></>}
+        </View> : null}
+      </View> : null}
       {!processing && !done ? <Text accessibilityRole="alert" style={styles.error}>{error || 'Analysis could not finish.'}</Text> : null}
     </GlassPanel>
+    <GlassPanel style={styles.diagnosticsPanel}>
+      <Text style={styles.heading}>Technical diagnostic log</Text>
+      <Text style={styles.copy}>Inference API: {diagnosticConnection} · Model: {diagnostics ? (diagnostics.service.modelLoaded ? 'loaded' : 'not loaded') : 'unknown'} · Version: {diagnostics?.service.version || 'unknown'}</Text>
+      <Text style={styles.copy}>Status database: {monitorError ? `poll error · ${monitorError}` : diagnostics ? 'diagnostic query succeeded' : diagnosticError || 'checking'}</Text>
+      {diagnostics?.run ? <>
+        <Text style={styles.copy}>Prediction: {diagnostics.run.status} · {diagnostics.run.progressPercent}%{diagnostics.run.error ? ` · error: ${diagnostics.run.error}` : ''}</Text>
+        <Text style={styles.copy}>Summary: {diagnostics.run.summaryStatus} · {diagnostics.run.summaryProgressPercent}% · {diagnostics.run.summaryStage || 'stage not set'} · last DB update {ageSince(diagnostics.run.summaryUpdatedAt)}</Text>
+        {diagnostics.run.summaryError ? <Text accessibilityRole="alert" style={styles.error}>Summary error: {diagnostics.run.summaryError}</Text> : null}
+        <Text style={styles.copy}>Local summary worker: {diagnostics.summaryWorker.runState}{diagnostics.summaryWorker.queuePosition ? ` · queue position ${diagnostics.summaryWorker.queuePosition}` : ''} · {diagnostics.summaryWorker.runningJobs} running · {diagnostics.summaryWorker.queuedJobs} queued</Text>
+        {diagnostics.summaryWorker.runState === 'not_registered' ? <Text style={styles.error}>The database says this summary is queued/processing, but this inference server has not registered it in its local worker queue.</Text> : null}
+      </> : <Text style={styles.copy}>No run diagnostics returned yet.</Text>}
+      <Text style={styles.logHeading}>Recent events (newest first)</Text>
+      {diagnosticLog.length ? diagnosticLog.map((entry, index) => <Text key={`${entry.time}-${index}`} style={styles.logText}>[{entry.time}] {entry.message}</Text>) : <Text style={styles.copy}>Waiting for the first status check.</Text>}
+    </GlassPanel>
     <View style={styles.actions}>
-      {done ? <AppButton onPress={() => router.push('/detail')}><Text style={styles.primary}>Open ECG and predictions</Text></AppButton>
+      {done ? <AppButton disabled={signalState === 'loading' || timelineState === 'loading' || signalState === 'waiting' || timelineState === 'waiting'} onPress={() => router.push('/detail')}><Text style={styles.primary}>Open ECG and predictions</Text></AppButton>
         : processing ? <AppButton variant="quiet" onPress={() => router.replace('/')}><Text style={styles.link}>Return home while analysis continues</Text></AppButton>
           : <AppButton onPress={() => { void retry(); }} disabled={busy}><Text style={styles.primary}>{busy ? 'Retrying…' : 'Retry analysis'}</Text></AppButton>}
       <Pressable accessibilityRole="link" onPress={() => router.replace('/')} style={styles.touch}><Text style={styles.link}>Back to home</Text></Pressable>
@@ -78,11 +260,12 @@ export default function ProcessingScreen() {
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   page: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 20, paddingTop: 24, paddingBottom: 56, gap: 18 },
-  panel: { gap: 12 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  panel: { gap: 12 }, diagnosticsPanel: { gap: 8 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, logHeading: { color: colors.text, fontSize: 14, fontWeight: '800', marginTop: 8 }, logText: { color: colors.muted, fontSize: 12, lineHeight: 18, fontFamily: 'monospace' }, secondaryWork: { gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }, offlineBlock: { gap: 8, marginTop: 4 },
   copy: { color: colors.text, fontSize: 14, lineHeight: 21 },
   progressRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 10 },
   track: { height: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.14)', overflow: 'hidden' },
   fill: { height: '100%', backgroundColor: colors.accent },
+  fillSecondary: { height: '100%', backgroundColor: colors.cyan },
   error: { color: colors.accentText, fontSize: 14, lineHeight: 21, backgroundColor: colors.coral, padding: 8, borderRadius: 8, overflow: 'hidden' },
   actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12 },
   primary: { color: colors.accentText, fontSize: 16, fontWeight: '800' },
