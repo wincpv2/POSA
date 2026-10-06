@@ -51,6 +51,8 @@ export type RecordSummary = {
 };
 
 type AnalysisStart = { runId: string; status: 'queued' | 'processing' | 'completed' };
+export type RecordTimeline = { uploadId: string; durationSeconds: number; source: 'model_prediction'; svg: string };
+export type SummaryJob = { runId: string; status: 'not_started' | 'queued' | 'processing' | 'completed' | 'failed'; progressPercent: number; stage: string | null; error: string | null };
 
 function apiUrl() {
   const value = process.env.EXPO_PUBLIC_INFERENCE_API_URL;
@@ -87,4 +89,12 @@ export function getSignalMinute(uploadId: string, minute: number, mode: 'raw' | 
 
 export function getRecordSummary(uploadId: string) {
   return request(`/v1/studies/${encodeURIComponent(uploadId)}/summary`) as Promise<RecordSummary>;
+}
+
+export function getRecordTimeline(uploadId: string) {
+  return request(`/v1/studies/${encodeURIComponent(uploadId)}/timeline`) as Promise<RecordTimeline>;
+}
+
+export function startRecordSummary(uploadId: string, refresh = false) {
+  return request(`/v1/studies/${encodeURIComponent(uploadId)}/summary${refresh ? '?refresh=true' : ''}`, { method: 'POST' }) as Promise<SummaryJob>;
 }

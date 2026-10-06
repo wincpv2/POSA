@@ -7,7 +7,7 @@ import { EcgWaveform, RecordingOverview } from '@/components/ecg-monitor';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { getRecordSummary, getSignalMinute, type RecordSummary, type SignalMinute } from '@/lib/inference';
+import { getRecordSummary, getRecordTimeline, getSignalMinute, startRecordSummary, type RecordSummary, type RecordTimeline, type SignalMinute } from '@/lib/inference';
 import { addSymptomEvent, deleteSymptomEvent, getEcgUploadOwner, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listSymptomEvents, SYMPTOM_TAGS, uploadEcgAnnotations, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type SymptomTag } from '@/lib/queries';
 
 const SPEEDS = [1, 5, 20] as const;
@@ -41,8 +41,10 @@ export default function DetailScreen() {
   const [events, setEvents] = useState<EcgSymptomEvent[]>([]);
   const [signal, setSignal] = useState<SignalMinute | null>(null);
   const [recordSummary, setRecordSummary] = useState<RecordSummary | null>(null);
+  const [timeline, setTimeline] = useState<RecordTimeline | null>(null);
+  const [timelineFetch, setTimelineFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
+  const [timelineRetry, setTimelineRetry] = useState(0);
   const [summaryFetch, setSummaryFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
-  const [summaryRetry, setSummaryRetry] = useState(0);
   const [intervalsOpen, setIntervalsOpen] = useState(true);
   const [annotationOwner, setAnnotationOwner] = useState(false);
   const [annotationBusy, setAnnotationBusy] = useState(false);
@@ -80,8 +82,11 @@ export default function DetailScreen() {
   const currentMinute = Math.min(Math.floor(safePlayheadSec / 60), Math.max(0, Math.ceil(totalDuration / 60) - 1));
   const currentSecond = safePlayheadSec - currentMinute * 60;
   const signalKey = `${study.uploadId ?? ''}:${currentMinute}:${signalMode}:${signalRetry}`;
-  const summaryKey = `${study.uploadId ?? ''}:${run?.id ?? ''}:${summaryRetry}`;
-  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : '';
+  const summaryKey = `${study.uploadId ?? ''}:${run?.id ?? ''}`;
+  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : run?.summary_status === 'failed' ? run.summary_error_message ?? 'Full-night summary failed.' : '';
+  const timelineKey = `${study.uploadId ?? ''}:${run?.id ?? ''}:${timelineRetry}`;
+  const timelineError = timelineFetch.key === timelineKey ? timelineFetch.error : '';
+  const timelineLoading = run?.status === 'completed' && timeline?.uploadId !== study.uploadId && !timelineError;
   const currentSignal = signal?.uploadId === study.uploadId && signal.minuteIndex === currentMinute && signal.mode === signalMode ? signal : null;
   const currentRecordSummary = recordSummary?.uploadId === study.uploadId && (run?.status !== 'completed' || recordSummary.modelMetrics.runId === run.id) ? recordSummary : null;
   const currentEvents = events.filter((event) => event.ecg_upload_id === study.uploadId);
@@ -163,11 +168,47 @@ export default function DetailScreen() {
   useEffect(() => {
     if (!study.uploadId || run?.status !== 'completed') return;
     let cancelled = false;
-    getRecordSummary(study.uploadId)
-      .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
-      .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: reason instanceof Error ? reason.message : 'Could not load recording summary.' }); });
+    let refreshing = false;
+    const refreshStatus = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        const latest = await getLatestPredictionRun(study.uploadId!);
+        if (!cancelled && latest?.id === run.id) setRun(latest);
+      } catch { /* keep displaying the last persisted progress while offline */ }
+      finally { refreshing = false; }
+    };
+    if (run.summary_status === 'not_started') void startRecordSummary(study.uploadId).catch((reason) => {
+      if (!cancelled) setSummaryFetch({ key: summaryKey, error: reason instanceof Error ? reason.message : 'Could not start the full-night summary.' });
+    });
+    if (run.summary_status === 'completed') {
+      getRecordSummary(study.uploadId)
+        .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
+        .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: reason instanceof Error ? reason.message : 'Could not load recording summary.' }); });
+    }
+    if (run.summary_status !== 'completed' && run.summary_status !== 'failed') {
+      void refreshStatus();
+      const timer = setInterval(() => { void refreshStatus(); }, 2000);
+      return () => { cancelled = true; clearInterval(timer); };
+    }
     return () => { cancelled = true; };
-  }, [study.uploadId, run?.status, summaryKey]);
+  }, [study.uploadId, run?.id, run?.status, run?.summary_status, summaryKey]);
+
+  useEffect(() => {
+    if (!study.uploadId || run?.status !== 'completed') return;
+    let cancelled = false;
+    getRecordTimeline(study.uploadId)
+      .then((value) => { if (!cancelled) setTimeline(value); })
+      .catch((reason) => { if (!cancelled) setTimelineFetch({ key: timelineKey, error: reason instanceof Error ? reason.message : 'Python timeline unavailable.' }); });
+    return () => { cancelled = true; };
+  }, [study.uploadId, run?.id, run?.status, timelineRetry, timelineKey]);
+
+  const retrySummary = async () => {
+    if (!study.uploadId) return;
+    setSummaryFetch({ key: summaryKey, error: '' });
+    try { await startRecordSummary(study.uploadId, true); setRun((current) => current ? { ...current, summary_status: 'queued', summary_progress_percent: 0, summary_stage: 'Queued for retry', summary_error_message: null } : current); }
+    catch (reason) { setSummaryFetch({ key: summaryKey, error: reason instanceof Error ? reason.message : 'Could not restart full-night summary.' }); }
+  };
 
   useEffect(() => {
     if (!playing) return;
@@ -255,9 +296,16 @@ export default function DetailScreen() {
       const extensions = files.map((file) => file.name.split('.').pop()?.toLowerCase());
       if (new Set(extensions).size !== extensions.length) throw new Error('Choose at most one file of each annotation type.');
       await uploadEcgAnnotations(study.uploadId, files.map((file) => ({ uri: file.uri, name: file.name, mimeType: file.mimeType })));
+      setRecordSummary(null);
       setSignalRetry((value) => value + 1);
       setSelectedPeak(null);
-      setAnnotationMessage('Annotations attached. Reference peaks and intervals are loading.');
+      try {
+        await startRecordSummary(study.uploadId, true);
+        setRun((current) => current ? { ...current, summary_status: 'queued', summary_progress_percent: 0, summary_stage: 'Recalculating with annotations', summary_error_message: null } : current);
+        setAnnotationMessage('Annotations attached. Reference peaks, intervals, and summary are refreshing.');
+      } catch {
+        setAnnotationMessage('Annotations attached. Reference peaks and intervals are loading; retry the summary from the report if its metrics stay unavailable.');
+      }
     } catch (reason) {
       setSignalRetry((value) => value + 1);
       const message = typeof reason === 'object' && reason && 'message' in reason ? String(reason.message) : '';
@@ -386,10 +434,12 @@ export default function DetailScreen() {
           viewStartSec={currentMinute * 60 + viewStartSec}
           viewSeconds={viewSeconds}
           timelineHeight={desktop ? 88 : undefined}
-          overviewSvg={currentRecordSummary?.charts.screen.fullNightOverviewSvg}
-          loading={run?.status === 'completed' && !currentRecordSummary && !summaryError}
+          overviewSvg={timeline?.uploadId === study.uploadId ? timeline.svg : undefined}
+          loading={timelineLoading || (run?.status === 'completed' && !timeline && !timelineError)}
           onSeek={jumpTo}
         />
+        {timelineError ? <View style={styles.summaryError}><Text style={styles.chartHint}>{timelineError}</Text><AppButton compact variant="quiet" onPress={() => setTimelineRetry((value) => value + 1)}><Text style={styles.link}>Retry timeline</Text></AppButton></View> : null}
+        {run?.status === 'completed' && run.summary_status !== 'completed' ? <Text style={styles.chartHint}>{run.summary_stage || 'Full-night HR/HRV and report charts are still preparing'} · {run.summary_progress_percent}%</Text> : null}
         {annotationMessage ? <Text style={styles.chartHint}>{annotationMessage}</Text> : null}
         {annotationError ? <Text accessibilityRole="alert" style={styles.error}>{annotationError}</Text> : null}
         {currentEvents.length > 0 && desktop ? <DetailsDisclosure title={`Symptom events (${currentEvents.length})`}>
@@ -422,7 +472,7 @@ export default function DetailScreen() {
             <Text style={styles.intervalToggle}>{intervalsOpen ? 'Hide' : 'Show'}</Text>
           </Pressable>
           {intervalsOpen ? <>
-            {summaryError ? <View style={styles.summaryError}><Text style={styles.chartHint}>{summaryError}</Text><AppButton compact variant="quiet" onPress={() => setSummaryRetry((value) => value + 1)}><Text style={styles.link}>Retry</Text></AppButton></View> : null}
+            {summaryError ? <View style={styles.summaryError}><Text style={styles.chartHint}>{summaryError}</Text><AppButton compact variant="quiet" onPress={() => { void retrySummary(); }}><Text style={styles.link}>Retry</Text></AppButton></View> : null}
             <View style={styles.intervalColumns}><Text style={styles.intervalIndex}>#</Text><Text style={styles.intervalTime}>Start</Text><Text style={styles.intervalTime}>End</Text><Text style={styles.intervalDuration}>min</Text></View>
             <ScrollView style={[styles.intervalList, desktop && styles.intervalListDesktop]} nestedScrollEnabled>
               {apneaIntervals.map((interval, index) => <Pressable key={`${annotationsAvailable ? 'ann' : 'model'}-${index}`} accessibilityRole="button" onPress={() => jumpTo(interval.startSeconds)} style={styles.intervalRow}>

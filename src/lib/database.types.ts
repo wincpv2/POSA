@@ -363,6 +363,11 @@ export type Database = {
           started_at: string | null
           status: string
           total_minutes: number | null
+          summary_status: string
+          summary_progress_percent: number
+          summary_stage: string | null
+          summary_error_message: string | null
+          summary_result: Json | null
         }
         Insert: {
           apnea_minutes?: number | null
@@ -377,6 +382,11 @@ export type Database = {
           started_at?: string | null
           status?: string
           total_minutes?: number | null
+          summary_status?: string
+          summary_progress_percent?: number
+          summary_stage?: string | null
+          summary_error_message?: string | null
+          summary_result?: Json | null
         }
         Update: {
           apnea_minutes?: number | null
@@ -391,6 +401,11 @@ export type Database = {
           started_at?: string | null
           status?: string
           total_minutes?: number | null
+          summary_status?: string
+          summary_progress_percent?: number
+          summary_stage?: string | null
+          summary_error_message?: string | null
+          summary_result?: Json | null
         }
         Relationships: [
           {

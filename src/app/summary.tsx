@@ -5,7 +5,7 @@ import { AppButton, DetailsDisclosure, GlassPanel, PageIntro, PosaText as Text }
 import ShareWithPatient from '@/components/share-with-patient';
 import { exportReportPdf, reportPdfBlob } from '@/components/report-export';
 import { Chart as PythonChart, NightSummaryPanel } from '@/components/night-summary';
-import { getRecordSummary, type RecordSummary } from '@/lib/inference';
+import { getRecordSummary, startRecordSummary, type RecordSummary } from '@/lib/inference';
 import { useAuth } from '@/lib/auth-context';
 import { EMPTY_REPORT, getLatestPredictionRun, getStudyReport, listPredictionMinutes, listReportPdfs, listSymptomEvents, reportPdfUrl, saveReportPdf, saveStudyReportText, setStudyReportStatus, type EcgSymptomEvent, type PredictionMinute, type PredictionRun, type ReportStatus, type SavedReportPdf, type StudyReport } from '@/lib/queries';
 import { useUploadState } from '@/components/posa-state';
@@ -28,7 +28,6 @@ export default function SummaryScreen() {
   const [minutes, setMinutes] = useState<PredictionMinute[]>([]);
   const [recordSummary, setRecordSummary] = useState<RecordSummary | null>(null);
   const [summaryFetch, setSummaryFetch] = useState<{ key: string; error: string }>({ key: '', error: '' });
-  const [summaryRetry, setSummaryRetry] = useState(0);
   const [view, setView] = useState<'Night Summary' | 'Clinical report'>('Night Summary');
   const [opinion, setOpinion] = useState('');
   const [explanation, setExplanation] = useState('');
@@ -39,9 +38,9 @@ export default function SummaryScreen() {
   const [symptomEvents, setSymptomEvents] = useState<EcgSymptomEvent[]>([]);
   const [exporting, setExporting] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const summaryKey = `${uploadId ?? ''}:${run?.id ?? ''}:${summaryRetry}`;
-  const summaryLoading = run?.status === 'completed' && summaryFetch.key !== summaryKey;
-  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : '';
+  const summaryKey = `${uploadId ?? ''}:${run?.id ?? ''}`;
+  const summaryLoading = run?.status === 'completed' && run.summary_status !== 'failed' && (run.summary_status !== 'completed' || summaryFetch.key !== summaryKey);
+  const summaryError = summaryFetch.key === summaryKey ? summaryFetch.error : run?.summary_status === 'failed' ? run.summary_error_message ?? 'Full-night summary failed.' : '';
 
   useEffect(() => {
     if (!uploadId) return;
@@ -59,11 +58,40 @@ export default function SummaryScreen() {
   useEffect(() => {
     if (!uploadId || run?.status !== 'completed') return;
     let cancelled = false;
-    getRecordSummary(uploadId)
-      .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
-      .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not load the ECG night summary.') }); });
+    let refreshing = false;
+    const refreshStatus = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
+      try {
+        const latest = await getLatestPredictionRun(uploadId);
+        if (!cancelled && latest?.id === run.id) setRun(latest);
+      } catch { /* retain the last saved progress while offline */ }
+      finally { refreshing = false; }
+    };
+    if (run.summary_status === 'not_started') void startRecordSummary(uploadId).catch((reason) => {
+      if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not start the full-night summary.') });
+    });
+    if (run.summary_status === 'completed') {
+      getRecordSummary(uploadId)
+        .then((value) => { if (!cancelled) { setRecordSummary(value); setSummaryFetch({ key: summaryKey, error: '' }); } })
+        .catch((reason) => { if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not load the ECG night summary.') }); });
+    }
+    if (run.summary_status !== 'completed' && run.summary_status !== 'failed') {
+      void refreshStatus();
+      const timer = setInterval(() => { void refreshStatus(); }, 2000);
+      return () => { cancelled = true; clearInterval(timer); };
+    }
     return () => { cancelled = true; };
-  }, [uploadId, run?.status, summaryKey]);
+  }, [uploadId, run?.id, run?.status, run?.summary_status, summaryKey]);
+
+  const retrySummary = async () => {
+    if (!uploadId) return;
+    try {
+      await startRecordSummary(uploadId, true);
+      setRun((current) => current ? { ...current, summary_status: 'queued', summary_progress_percent: 0, summary_stage: 'Queued for retry', summary_error_message: null } : current);
+      setSummaryFetch({ key: '', error: '' });
+    } catch (reason) { setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not restart the full-night summary.') }); }
+  };
 
   useEffect(() => {
     if (!uploadId) return;
@@ -161,7 +189,7 @@ export default function SummaryScreen() {
   return <ScrollView contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY SUMMARY" title="Clinical summary" description={`${study.studyId || 'Study'} · report ${status.toLowerCase()}`} />
     <View style={styles.viewTabs}>{(['Night Summary', 'Clinical report'] as const).map((value) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: view === value }} onPress={() => setView(value)} style={[styles.viewTab, view === value && styles.viewTabActive]}><Text selectable={false} style={[styles.tabText, view === value && styles.tabTextActive]}>{value}</Text></Pressable>)}</View>
-    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => setSummaryRetry((value) => value + 1)} /> : <>
+    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => { void retrySummary(); }} /> : <>
 
     <GlassPanel style={styles.panel}>
       <Text style={styles.title}>Model results</Text>
