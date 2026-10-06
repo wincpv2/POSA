@@ -3,36 +3,24 @@ import { useEffect, useMemo, useState } from 'react';
 import Svg, { Path } from 'react-native-svg';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native';
 import { AppButton, GlassPanel, PosaText as Text } from '@/components/posa-ui';
-import { sampleEvents, useUploadState, type ApneaEvent, type Study, type SummaryMetrics } from '@/components/posa-state';
+import { useUploadState } from '@/components/posa-state';
 import { colors, fonts } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
 import { getDeletionLog, listRecentEcgUploads, restoreEcgUpload, softDeleteEcgUpload, timeAgo, type DeletionLogEntry, type RecentEcgUpload } from '@/lib/queries';
 
-type StudyStatus = 'Awaiting analysis' | 'Needs review' | 'Processing' | 'Approved' | 'Failed';
-// The illustrative sample studies from the team's UI (shown after real uploads,
-// labelled SAMPLE, never deletable). They open with full sample charts.
-type SampleRow = { id: string; status: StudyStatus; age: string; sex: string; duration: string; severity: string; burden: string; total: number; ago: string; progress?: number; apneaMinutes: string; clearMinutes: string; metrics: SummaryMetrics | null };
-type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; detail: string; ago: string; upload?: RecentEcgUpload; sample?: SampleRow };
+type StudyStatus = 'Awaiting analysis' | 'Processing' | 'Analysis complete' | 'Failed';
+type StudyRecord = { id: string; status: StudyStatus; age: string; sex: string; detail: string; ago: string; upload: RecentEcgUpload };
 
-const samples: SampleRow[] = [
-  { id: 'REC-8842-PT', status: 'Needs review', age: '54', sex: 'M', duration: '08:30:00', severity: 'Severe OSA', burden: '47.2%', total: 17, ago: '10 min ago', apneaMinutes: '240', clearMinutes: '268', metrics: { rPeakCount: 41820, annotationRuns: 9, medianHrBpm: 82, sdnnMs: 87, rmssdMs: 45, validRrPercent: 100 } },
-  { id: 'REC-8841-KL', status: 'Needs review', age: '61', sex: 'M', duration: '08:12:00', severity: 'Severe OSA', burden: '49.3%', total: 19, ago: '42 min ago', apneaMinutes: '242', clearMinutes: '250', metrics: null },
-  { id: 'REC-8839-MN', status: 'Needs review', age: '47', sex: 'F', duration: '07:48:00', severity: 'Severe OSA', burden: '47.6%', total: 15, ago: '1 h 15 min ago', apneaMinutes: '223', clearMinutes: '245', metrics: null },
-  { id: 'REC-8845-QA', status: 'Processing', age: '58', sex: 'M', duration: '08:00:00', severity: 'Pending', burden: '', total: 19, ago: '8 min ago', progress: 62, apneaMinutes: '', clearMinutes: '', metrics: null },
-  { id: 'REC-8827-TS', status: 'Approved', age: '66', sex: 'M', duration: '07:30:00', severity: 'Moderate', burden: '31.0%', total: 12, ago: 'Yesterday', apneaMinutes: '140', clearMinutes: '310', metrics: null },
-  { id: 'REC-8829-RX', status: 'Approved', age: '39', sex: 'F', duration: '07:18:00', severity: 'Mild / Normal', burden: '16.6%', total: 4, ago: '5 h 20 min ago', apneaMinutes: '73', clearMinutes: '365', metrics: null },
-];
-const sampleRecords: StudyRecord[] = samples.map((row) => ({ id: row.id, status: row.status, age: row.age, sex: row.sex === 'M' ? 'Male' : 'Female', detail: row.duration, ago: row.ago, sample: row }));
-function makeEvents(count: number): ApneaEvent[] {
-  return Array.from({ length: count }, (_, index) => ({ ...sampleEvents[index % sampleEvents.length], id: index + 1 }));
-}
-
-const statusOf = (dbStatus: string): StudyStatus => dbStatus === 'processing' ? 'Processing' : dbStatus === 'failed' ? 'Failed' : 'Awaiting analysis';
-const formatOf = (name: string | null): Study['format'] => /\.edf\b/i.test(name ?? '') ? 'edf' : /\.(hea|dat)\b/i.test(name ?? '') ? 'wfdb' : /\.(png|jpe?g|tiff?)\b/i.test(name ?? '') ? 'image' : null;
+const statusOf = (upload: RecentEcgUpload): StudyStatus => {
+  if (upload.latestRun?.status === 'processing' || upload.latestRun?.status === 'queued' || upload.status === 'processing') return 'Processing';
+  if (upload.latestRun?.status === 'failed' || upload.status === 'failed') return 'Failed';
+  if (upload.latestRun?.status === 'completed' || upload.status === 'completed') return 'Analysis complete';
+  return 'Awaiting analysis';
+};
 
 function toRecord(upload: RecentEcgUpload): StudyRecord {
   return {
-    id: upload.recordCode, status: statusOf(upload.status), upload, ago: timeAgo(upload.createdAt),
+    id: upload.recordCode, status: statusOf(upload), upload, ago: timeAgo(upload.createdAt),
     age: upload.ageYears != null ? String(upload.ageYears) : '—', sex: sexLabel(upload.sex) || '—',
     detail: [upload.samplingRateHz ? `${upload.samplingRateHz} Hz` : null, upload.leadConfiguration].filter(Boolean).join(' · ') || 'Signal settings unavailable',
   };
@@ -40,7 +28,7 @@ function toRecord(upload: RecentEcgUpload): StudyRecord {
 
 const sexLabel = (value: string | null) => value === 'unspecified' ? 'Unknown' : value ? value[0].toUpperCase() + value.slice(1) : '';
 
-const filterLabels = ['All', 'Awaiting analysis', 'Needs review', 'Processing', 'Approved', 'Failed'] as const;
+const filterLabels = ['All', 'Awaiting analysis', 'Processing', 'Analysis complete', 'Failed'] as const;
 
 export default function HomeScreen() {
   const { width } = useWindowDimensions();
@@ -99,7 +87,7 @@ export default function HomeScreen() {
     catch (reason) { setActionError(messageOf(reason, 'Could not restore the study.')); }
   };
 
-  const allRecords = useMemo(() => [...records, ...sampleRecords], [records]);
+  const allRecords = records;
   const filters = filterLabels
     .map((label) => ({ label, count: label === 'All' ? allRecords.length : allRecords.filter((record) => record.status === label).length }))
     .filter((item) => item.label === 'All' || item.count > 0 || item.label === filter);
@@ -107,27 +95,19 @@ export default function HomeScreen() {
   const awaiting = records.filter((record) => record.status === 'Awaiting analysis').length;
 
   const open = (record: StudyRecord) => {
-    const { upload, sample } = record;
-    if (sample) {
-      update({
-        studyId: sample.id, fileName: `${sample.id.toLowerCase()}.edf`, format: 'edf', sampleRate: 250, lead: 'Lead II',
-        age: sample.age, sex: sample.sex === 'M' ? 'Male' : 'Female', bmi: sample.id === 'REC-8842-PT' ? '29.8' : '', severity: sample.severity,
-        apneaBurden: sample.burden, apneaMinutes: sample.apneaMinutes, noEventMinutes: sample.clearMinutes, duration: sample.duration,
-        metadata: 'Sample record · illustrative values', status: sample.status === 'Processing' ? 'processing' : 'ready',
-        progress: sample.progress ?? 100, events: makeEvents(sample.total), summaryMetrics: sample.metrics,
-        reportStatus: sample.status === 'Approved' ? 'Approved' : 'Draft', uploadId: null, patientId: null,
-      });
-      router.push(sample.status === 'Processing' ? '/processing' : sample.status === 'Approved' ? '/summary' : '/detail');
-      return;
-    }
-    if (!upload) return;
+    const { upload } = record;
+    const run = upload.latestRun;
+    const status = run?.status === 'completed' || upload.status === 'completed' ? 'ready'
+      : run?.status === 'processing' || run?.status === 'queued' || upload.status === 'processing' ? 'processing'
+        : run?.status === 'failed' || upload.status === 'failed' ? 'failed' : 'uploaded';
     update({
-      studyId: record.id, fileName: upload.originalFilename, format: formatOf(upload.originalFilename), sampleRate: upload.samplingRateHz, lead: upload.leadConfiguration ?? '',
-      age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '', severity: 'Pending',
-      apneaBurden: '', apneaMinutes: '', noEventMinutes: '', duration: '',
-      metadata: 'Stored upload · analysis not connected', status: 'ready', progress: 100, events: [], summaryMetrics: null, reportStatus: 'Draft', uploadId: upload.id, patientId: upload.patientId,
+      studyId: record.id, fileName: upload.originalFilename, format: 'wfdb', sampleRate: upload.samplingRateHz, lead: upload.leadConfiguration ?? '',
+      age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '',
+      metadata: 'Private WFDB recording', status, progress: run?.progress_percent ?? 0,
+      reportStatus: 'Draft', uploadId: upload.id, patientId: upload.patientId,
+      durationSeconds: upload.durationSeconds ?? 0, runId: run?.id ?? null, errorMessage: run?.error_message ?? '',
     });
-    router.push('/detail');
+    router.push(status === 'ready' ? '/detail' : '/processing');
   };
   const hasActiveStudy = Boolean(study.studyId && study.status !== 'empty');
   const continuePath = study.status === 'processing' || study.status === 'failed' ? '/processing' : '/detail';
@@ -199,11 +179,10 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
   return <View style={styles.rowWrap}>
     <Pressable accessibilityRole="button" accessibilityLabel={`${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
       <View style={[styles.studyRow, compact && styles.studyRowCompact]}>
-        <View style={styles.identity}><View style={styles.idRow}><Text style={styles.studyId}>{record.id}</Text>{record.sample ? <Text style={styles.sampleTag}>SAMPLE</Text> : null}</View><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
-        {record.sample ? <View style={[styles.severityBadge, record.sample.severity === 'Severe OSA' && styles.severeBadge, record.sample.severity === 'Moderate' && styles.moderateBadge, record.sample.severity === 'Mild / Normal' && styles.mildBadge, record.sample.severity === 'Pending' && styles.pendingBadge]}><Text style={[styles.severityText, record.sample.severity !== 'Pending' && styles.badgeDark]}>{record.sample.severity === 'Severe OSA' ? '▲' : record.sample.severity === 'Moderate' ? '◆' : record.sample.severity === 'Mild / Normal' ? '✓' : '○'} {record.sample.severity}{record.sample.burden ? ` · ${record.sample.burden}` : ''}</Text></View>
-          : <View style={[styles.severityBadge, styles.pendingBadge]}><Text style={styles.severityText}>○ Pending</Text></View>}
-        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.sample ? (record.status === 'Processing' ? `Processing ${record.sample.progress ?? 0}%` : record.status === 'Approved' ? 'Report approved' : 'Report needs review') : record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: record.status === 'Awaiting analysis' ? '0%' : '100%' }]} /></View></View>
-        <View style={styles.reviewBlock}><Text style={styles.reviewText}>{record.sample ? `${record.sample.total} apnea events` : 'Stored'}</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
+        <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
+        <View style={[styles.statusBadge, styles.pendingBadge]}><Text style={styles.statusBadgeText}>{record.status}</Text></View>
+        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: `${record.upload.latestRun?.progress_percent ?? (record.status === 'Analysis complete' ? 100 : 0)}%` }]} /></View></View>
+        <View style={styles.reviewBlock}><Text style={styles.reviewText}>{record.upload.latestRun?.status === 'completed' ? `${record.upload.latestRun.apnea_minutes ?? 0} / ${record.upload.latestRun.total_minutes ?? 0} apnea minutes` : 'WFDB recording'}</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
       </View>
     </Pressable>
     {canDelete ? <Pressable accessibilityRole="button" accessibilityLabel={`Delete ${record.id}`} onPress={onAskDelete} style={({ pressed }) => [styles.trash, pressed && styles.pressed]}>
@@ -215,7 +194,6 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
 function Kpi({ value, label }: { value: string; label: string }) { return <View style={styles.kpi}><Text style={styles.kpiValue}>{value}</Text><Text style={styles.kpiLabel}>{label}</Text></View>; }
 
 const styles = StyleSheet.create({
-  idRow: { flexDirection: 'row', alignItems: 'center', gap: 8 }, sampleTag: { color: colors.accentText, backgroundColor: '#FFD166', fontSize: 11, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, overflow: 'hidden' },
   logHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }, logAll: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 6, cursor: 'pointer' } as never, logAllText: { color: colors.accent, fontSize: 14, fontWeight: '800', textDecorationLine: 'underline' },
   rowWrap: { flexDirection: 'row', alignItems: 'stretch', gap: 6 }, rowMain: { flex: 1 },
   trash: { width: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: 'rgba(2,3,58,0.42)' },
@@ -236,7 +214,7 @@ const styles = StyleSheet.create({
   columns: { gap: 14 }, columnsWide: { flexDirection: 'row', alignItems: 'flex-start' }, mainColumn: { flex: 1, minWidth: 0, gap: 14 }, sideColumn: { gap: 14 }, sideColumnWide: { width: 320 },
   continueCard: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderColor: 'rgba(144,224,239,0.7)' }, continueCopy: { flex: 1, minWidth: 220, gap: 3 }, sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800' }, progressTrack: { width: '100%', maxWidth: 420, height: 10, overflow: 'hidden', borderRadius: 99, backgroundColor: 'rgba(202,240,248,0.24)', marginTop: 5 }, progressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.accent }, continueButton: { minHeight: 48, paddingHorizontal: 20 }, continueButtonText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   studiesPanel: { gap: 14 }, studiesHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, filter: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 999, backgroundColor: 'rgba(202,240,248,0.13)' }, filterActive: { backgroundColor: colors.accent }, filterText: { color: colors.text, fontSize: 14, fontWeight: '700' }, filterTextActive: { color: colors.accentText }, recordList: { gap: 8 }, rowPress: { borderRadius: 18 }, pressed: { opacity: 0.84 },
-  studyRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.42)' }, studyRowCompact: { alignItems: 'flex-start', flexDirection: 'column', gap: 9 }, identity: { flex: 1, minWidth: 120 }, studyId: { color: colors.text, fontSize: 16, fontWeight: '800' }, subCopy: { color: colors.muted, fontSize: 14 }, severityBadge: { minHeight: 30, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: 'transparent' }, severityText: { color: colors.accentText, fontSize: 14, fontWeight: '800' }, badgeDark: { color: colors.accentText }, severeBadge: { backgroundColor: colors.coral }, moderateBadge: { backgroundColor: '#FFD166' }, mildBadge: { backgroundColor: colors.accent }, pendingBadge: { borderStyle: 'dashed', borderColor: colors.text, backgroundColor: 'transparent' },
+  studyRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.42)' }, studyRowCompact: { alignItems: 'flex-start', flexDirection: 'column', gap: 9 }, identity: { flex: 1, minWidth: 120 }, studyId: { color: colors.text, fontSize: 16, fontWeight: '800' }, subCopy: { color: colors.muted, fontSize: 14 }, statusBadge: { minHeight: 30, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: 'transparent' }, statusBadgeText: { color: colors.text, fontSize: 14, fontWeight: '800' }, pendingBadge: { borderStyle: 'dashed', borderColor: colors.text, backgroundColor: 'transparent' },
   statusBlock: { width: 140, gap: 4 }, rowStatus: { color: colors.text, fontSize: 14 }, rowProgress: { height: 7, overflow: 'hidden', borderRadius: 99, backgroundColor: 'rgba(202,240,248,0.24)' }, rowProgressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.accent }, reviewBlock: { minWidth: 116, gap: 2 }, reviewText: { color: colors.text, fontSize: 14 }, empty: { color: colors.text, fontSize: 14, padding: 10 },
   sidePanel: { gap: 12 }, kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, kpi: { width: '48%', minHeight: 86, justifyContent: 'center', padding: 12, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.44)' }, kpiValue: { color: colors.text, fontSize: 28, lineHeight: 32, fontWeight: '800' }, kpiLabel: { color: colors.muted, fontSize: 14, lineHeight: 19 },
   mixBar: { height: 18, flexDirection: 'row', overflow: 'hidden', borderRadius: 99 }, mixSevere: { backgroundColor: colors.coral }, mixModerate: { backgroundColor: '#FFD166' }, mixMild: { backgroundColor: colors.accent }, mixPending: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.text }, legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, legendItem: { minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 6 }, legendDot: { width: 12, height: 12, borderRadius: 3, borderWidth: 1 }, dashed: { borderStyle: 'dashed' }, legendText: { color: colors.text, fontSize: 14 },

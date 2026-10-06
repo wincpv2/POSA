@@ -8,6 +8,7 @@ import { PosaText } from './posa-ui';
 import { UploadProvider, useUploadState } from './posa-state';
 import { colors, navItems } from './posa-theme';
 import { useAuth } from '@/lib/auth-context';
+import { PosaMark } from './posa-logo';
 
 function initialsOf(name: string) {
   const parts = name.split(/[\s@.]+/).filter(Boolean);
@@ -74,16 +75,15 @@ function Workspace() {
     <StatusBar style="light" />
     <View style={styles.header}>
       <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
-        <PosaText style={styles.moon}>{'\u263e'}</PosaText><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
+        <PosaMark size={28} /><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
       </Pressable></Link>
       <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${displayName}. Open account menu`} accessibilityState={{ expanded: menuOpen }} onPress={() => setMenuOpen((open) => !open)} style={[styles.avatar, menuOpen && styles.avatarOpen]}><PosaText style={styles.avatarText}>{initialsOf(displayName)}</PosaText></Pressable>
     </View>
     <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
       <View style={styles.caseChip}>
         <PosaText style={styles.case}>{caseLine}</PosaText>
-        {study.severity ? <View style={[styles.severity, study.severity === 'Moderate' && styles.moderate, study.severity === 'Mild / Normal' && styles.mild, study.severity === 'Pending' && styles.pending]}><PosaText style={[styles.severityText, study.severity === 'Pending' && styles.severityLight]}>{study.severity === 'Severe OSA' ? '▲' : study.severity === 'Moderate' ? '◆' : study.severity === 'Mild / Normal' ? '✓' : '○'} {study.severity}</PosaText></View> : null}
       </View>
-      <View style={styles.notice}><PosaText style={styles.noticeText}>Uploads are stored securely. Clinical analysis and PDF export are not connected yet.</PosaText></View>
+      <View style={styles.notice}><PosaText style={styles.noticeText}>ECG recordings are stored privately. Analysis results are available for clinician review.</PosaText></View>
     </View>
     <View style={styles.route}><Slot /></View>
     <View pointerEvents="box-none" style={styles.dockAnchor}>
@@ -240,11 +240,11 @@ const styles = StyleSheet.create({
   root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
   header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
-  moon: { color: colors.muted, fontSize: 22 }, brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
+  brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
   avatar: { width: 42, height: 42, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   contentTop: { width: '100%', maxWidth: 1440, alignSelf: 'center', paddingHorizontal: 20, gap: 8 }, contentTopCompact: { paddingHorizontal: 12 },
   caseChip: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
-  case: { color: colors.text, fontSize: 14, fontWeight: '700' }, severity: { backgroundColor: colors.coral, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 }, moderate: { backgroundColor: '#FFD166' }, mild: { backgroundColor: colors.accent }, pending: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.text }, severityText: { color: colors.accentText, fontSize: 14, fontWeight: '800' }, severityLight: { color: colors.text },
+  case: { color: colors.text, fontSize: 14, fontWeight: '700' },
   notice: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 10 }, noticeText: { color: colors.text, fontSize: 14 },
   route: { flex: 1, minHeight: 0, paddingBottom: 92 },
   avatarOpen: { borderWidth: 2, borderColor: colors.text },

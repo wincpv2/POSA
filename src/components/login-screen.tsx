@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { useAuth } from '@/lib/auth-context';
 
 import { colors, fonts } from './posa-theme';
+import { PosaMark } from './posa-logo';
 
 // Verbatim disclaimer text from the backend/auth course guide (p.13/24) — see
 // posa.md "Security & medical-app compliance". Required on the login screen.
@@ -35,9 +36,7 @@ export default function LoginScreen({ onBack }: { onBack?: () => void } = {}) {
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
       ) : null}
-      <View style={styles.brandMark}>
-        <Text style={styles.brandGlyph}>∿</Text>
-      </View>
+      <PosaMark size={72} />
       <Text style={styles.brandName}>POSA</Text>
       <Text style={styles.title}>Sleep Lab Workstation</Text>
 
@@ -62,8 +61,6 @@ export default function LoginScreen({ onBack }: { onBack?: () => void } = {}) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: colors.background, padding: 24 },
-  brandMark: { width: 56, height: 56, borderRadius: 16, backgroundColor: colors.panelRaised, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  brandGlyph: { color: colors.accent, fontSize: 32, fontFamily: fonts.bold },
   brandName: { color: colors.text, fontFamily: fonts.extraBold, fontSize: 24 },
   title: { color: colors.text, fontFamily: fonts.semibold, fontSize: 14, marginBottom: 12 },
   button: { backgroundColor: colors.accent, paddingHorizontal: 28, paddingVertical: 14, borderRadius: 999, minWidth: 240, minHeight: 48, alignItems: 'center', justifyContent: 'center' },

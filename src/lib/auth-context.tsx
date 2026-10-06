@@ -2,6 +2,7 @@ import * as AuthSession from 'expo-auth-session';
 import { getQueryParams } from 'expo-auth-session/build/QueryParams';
 import * as WebBrowser from 'expo-web-browser';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Platform } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
 import { supabase } from './supabase';
@@ -53,13 +54,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   async function signInWithGoogle() {
     // matches app.json's "scheme": "posaapp" — must also be added to Supabase's
     // Redirect URLs allow-list (Authentication > URL Configuration) as posaapp://auth/callback
-    const redirectTo = AuthSession.makeRedirectUri({ scheme: 'posaapp', path: 'auth/callback' });
+    const redirectTo = Platform.OS === 'web' && typeof window !== 'undefined'
+      ? new URL('/auth/callback', window.location.origin).toString()
+      : AuthSession.makeRedirectUri({ scheme: 'posaapp', path: 'auth/callback' });
 
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo,
-        skipBrowserRedirect: true,
+        // On web, use a same-window redirect: opening an OAuth popup after this
+        // async request loses the original click gesture and browsers block it.
+        skipBrowserRedirect: Platform.OS !== 'web',
         // Optional: only show one organisation's accounts in Google's picker
         // (e.g. email.kmutnb.ac.th). A hint, not a lock — the real check is the
         // hook_restrict_signup_domain auth hook on the server.
@@ -68,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     if (error) throw error;
     if (!data?.url) return;
+    if (Platform.OS === 'web') return;
 
     const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
     // The user closed the Google window themselves; not an error.

@@ -1,0 +1,14 @@
+.git
+.expo
+.vercel
+node_modules
+dist
+web-build
+release
+release-retry
+inference/.venv
+inference/__pycache__
+.env
+.env.*
+!.env.example
+*.log

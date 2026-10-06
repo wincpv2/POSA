@@ -3,8 +3,7 @@
 แอป React Native (Expo) สำหรับแพทย์และบุคลากรห้องแล็บการนอนหลับ ใช้อัปโหลดสัญญาณ ECG ของผู้ป่วย
 ดูผลการตรวจ เขียนรายงานและลงนาม แล้วส่งผลให้ผู้ป่วยดูผ่าน QR code หรือลิงก์ได้
 
-> **สถานะ:** ส่วน backend, การ login และการอัปโหลดใช้งานกับ Supabase ได้จริงแล้ว ส่วนการวิเคราะห์ด้วยโมเดล ML
-> **ยังไม่ได้เชื่อมต่อ** ผลวิเคราะห์ที่เห็นในแอปตอนนี้เป็นข้อมูลตัวอย่าง (DEMO) ทั้งหมด
+> **สถานะ:** App uploads real WFDB recordings to Supabase and sends them to the local SE-ResNet50-1D inference service. Model results are persisted for clinician review.
 
 ผู้ดูแลส่วน backend / database: Panut Anan ([@tonnow2005](https://github.com/tonnow2005), panuttonnow520@gmail.com)
 
@@ -24,8 +23,7 @@
 - **Login:** Google OAuth ผ่าน Supabase Auth
 - **PDF:** `expo-print` บนมือถือ และ `html2pdf.js` บนเว็บ
 - **QR:** `expo-camera` สำหรับสแกน และ `react-native-qrcode-svg` สำหรับสร้าง
-- **ML (กำลังทำ):** CatBoost / XGBoost / CNN ensemble บน feature จาก ECG (RRI, EDR, CPC, STFT/CWT)
-  เทรนด้วย PhysioNet Apnea-ECG และ validate ภายนอกด้วย UCDDB
+- **ML:** Trained SE-ResNet50-1D checkpoint; per-minute inference on 100 Hz ECG.
 
 ## ฟีเจอร์
 
@@ -37,6 +35,9 @@
   อ่าน sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม
 - **Detail:** หน้าดูสัญญาณ ECG (เล่น, ซูม, เลือกช่วงเวลา, เลื่อนไป apnea event ก่อนหน้า/ถัดไป)
   ตอนนี้แสดงกราฟได้เฉพาะรายการตัวอย่าง (SAMPLE) ส่วนการตรวจจริงจะแสดงเมื่อเชื่อมต่อ API ของ ML แล้ว
+- **Summary / Results:** ตัวเลขสรุปเดิม + แผงผลการนอน AHI (AI, HI), Events Breakdown
+  (Obstructive / Central / Mixed / Hypopnoea) และ ODI (SpO₂ Baseline / Avg / Lowest) พร้อมคำอธิบายภาษาไทย
+  ตอนนี้แสดง “—” จนกว่าจะเชื่อมผลวิเคราะห์ (ODI / SpO₂ ต้องมีเครื่องวัดออกซิเจนร่วมด้วย ECG อย่างเดียววัดไม่ได้)
 - **Summary / Report:**
   - แพทย์เขียน **Clinician opinion** และ **Patient explanation** เอง แล้วบันทึกลงฐานข้อมูล
   - สถานะ Draft → Reviewed → Approved และย้อนกลับได้
@@ -50,7 +51,8 @@
 
 ### ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
 - **Scan QR** (ค่าเริ่มต้น) หรือ **Paste link** เพื่อเปิด Dashboard ของตัวเอง
-- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง และเห็น **ข้อความจากแพทย์**
+- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง, **รูปสรุป**พร้อมแถบระดับความรุนแรงตาม AHI,
+  **พารามิเตอร์ชุดเดียวกับหน้า Summary ของแพทย์** (คำอธิบายภาษาง่าย) และเห็น **ข้อความจากแพทย์**
   (Patient explanation) เฉพาะคืนที่แพทย์ Approve รายงานแล้ว
 - ไม่แสดงชื่อ รหัสผู้ป่วย หรือความเห็นของแพทย์ (Clinician opinion) ให้ผู้ป่วยเห็น
 
@@ -103,7 +105,7 @@ npx expo lint
 
 ## Backend (Supabase)
 
-Migration ทั้งหมดอยู่ใน `supabase/migrations/` (18 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
+Migration ทั้งหมดอยู่ใน `supabase/migrations/` (19 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
 
 ```bash
 npx supabase login
@@ -181,6 +183,24 @@ supabase/migrations/   schema, RLS และฟังก์ชันทั้ง
 ## สิ่งที่ยังไม่ได้ทำ
 
 - เชื่อมต่อโมเดล ML (ต้องตกลง output contract กับทีม ML ก่อน: label และ probability รายนาที, R-peaks, beat labels)
-- พารามิเตอร์ใน Dashboard ผู้ป่วย (รอตกลงกับทีม)
+- ค่าจริงของ AHI / Events / ODI (UI พร้อมแล้ว รอผลจาก ML และสัญญาณ SpO₂) — นิยามทั้งหมดอยู่ที่ `src/components/sleep-results-data.ts`
 - Tier 3: ปุ่มขอลบบัญชีหรือข้อมูล, Privacy Policy, บัญชีสำหรับ reviewer
 - ทดสอบบนมือถือจริง (ตอนนี้ทดสอบบนเว็บเป็นหลัก)
+
+## Local trained model inference
+
+The app now sends uploaded WFDB records to a local FastAPI service. The service runs the SE-ResNet50-1D checkpoint on complete 60-second, 100 Hz ECG windows and saves per-minute probabilities and classes in Supabase. Only clinician-approved aggregate results are returned to patient links.
+
+1. Apply `supabase/migrations/20261004000010_ml_predictions.sql` to the project database before using inference. This adds run/result tables and updates patient result RPCs.
+2. Copy `inference/.env.example` to `inference/.env`. Set `POSA_MODEL_PATH` to the local `se_resnet50_epoch_05.pt`, and set the server-side `SUPABASE_URL`, publishable key, and **service role key**. Keep this file private; the service role key must never go in the Expo `.env`.
+3. Create a Python environment and install `inference/requirements.txt`. Install a PyTorch build separately if the machine does not already provide one; CPU inference is supported.
+4. Start the API from the repository root with `python -m uvicorn inference.service:app --host 0.0.0.0 --port 8010`.
+5. Set `EXPO_PUBLIC_INFERENCE_API_URL=http://localhost:8010` in the app `.env` and start Expo. Use a device-visible host address instead of `localhost` when running the app on a physical phone.
+
+The upload accepts one matching `.hea`/`.dat` pair at exactly 100 Hz. The ECG detail view displays the stored signal and model probability for each minute. Model outputs are research predictions, not a diagnosis.
+
+To smoke-check the checkpoint on the first four records of the notebook's recreated held-out Test split, run:
+
+`python -m inference.smoke_test --data-dir "D:/path/to/apnea-ecg-data" --model "D:/path/to/se_resnet50_epoch_05.pt"`
+
+The script requires the matching 78-record annotation set used by the notebook. The currently configured dataset folder has a different record count, so it cannot verify the held-out split until the matching data folder is supplied.

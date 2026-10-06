@@ -3,6 +3,7 @@ import '../global.css';
 import { Nunito_400Regular, Nunito_600SemiBold, Nunito_700Bold, Nunito_800ExtraBold } from '@expo-google-fonts/nunito';
 import { useFonts } from 'expo-font';
 import { Slot, usePathname } from 'expo-router';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ActivityIndicator, View } from 'react-native';
 
 import PosaShell from '@/components/posa-shell';
@@ -19,7 +20,7 @@ function Gate() {
   const pathname = usePathname();
   // Patient links (dashboard /p/…, single study /shared/…) open for anyone,
   // signed in or not.
-  if (pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
+  if (pathname === '/auth/callback' || pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
   if (loading) return <Spinner />;
   return session ? <PosaShell /> : <RoleSelect />;
 }
@@ -32,5 +33,5 @@ export default function RootLayout() {
     [fonts.extraBold]: Nunito_800ExtraBold,
   });
   if (!loaded && !error) return <Spinner />;
-  return <AuthProvider><Gate /></AuthProvider>;
+  return <GestureHandlerRootView style={{ flex: 1 }}><AuthProvider><Gate /></AuthProvider></GestureHandlerRootView>;
 }

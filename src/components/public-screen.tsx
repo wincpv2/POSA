@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { PosaText as Text } from './posa-ui';
 import { colors } from './posa-theme';
+import { PosaMark } from './posa-logo';
 
 // Verbatim disclaimers from the backend/auth course guide (see posa.md
 // "Security & medical-app compliance").
@@ -23,7 +24,7 @@ export function PublicScreen({ children, onBack }: { children: ReactNode; onBack
               <Text style={styles.backText}>← Back</Text>
             </Pressable>
           ) : <View style={styles.back} />}
-          <View style={styles.brand}><Text style={styles.moon}>{'☾'}</Text><Text style={styles.brandName}>POSA</Text><Text style={styles.brandSub}>Sleep lab</Text></View>
+          <View style={styles.brand}><PosaMark size={26} /><Text style={styles.brandName}>POSA</Text><Text style={styles.brandSub}>Sleep lab</Text></View>
           <View style={styles.back} />
         </View>
         <View style={styles.content}>{children}</View>
@@ -39,6 +40,6 @@ const styles = StyleSheet.create({
   back: { minWidth: 72, minHeight: 44, justifyContent: 'center' },
   backText: { color: colors.text, fontSize: 14, fontWeight: '700' },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  moon: { color: colors.muted, fontSize: 22 }, brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
+  brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
   content: { flex: 1, justifyContent: 'center', gap: 16, paddingTop: 12 },
 });

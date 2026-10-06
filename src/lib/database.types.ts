@@ -107,6 +107,48 @@ export type Database = {
           },
         ]
       }
+      ecg_symptom_events: {
+        Row: {
+          created_at: string
+          created_by: string
+          ecg_upload_id: string
+          id: string
+          occurred_at_seconds: number
+          symptoms: string[]
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string
+          ecg_upload_id: string
+          id?: string
+          occurred_at_seconds: number
+          symptoms: string[]
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          ecg_upload_id?: string
+          id?: string
+          occurred_at_seconds?: number
+          symptoms?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ecg_symptom_events_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ecg_symptom_events_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: false
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ecg_uploads: {
         Row: {
           age_years: number | null
@@ -278,6 +320,95 @@ export type Database = {
         }
         Relationships: []
       }
+      prediction_minutes: {
+        Row: {
+          apnea_probability: number
+          is_apnea: boolean
+          minute_index: number
+          run_id: string
+        }
+        Insert: {
+          apnea_probability: number
+          is_apnea: boolean
+          minute_index: number
+          run_id: string
+        }
+        Update: {
+          apnea_probability?: number
+          is_apnea?: boolean
+          minute_index?: number
+          run_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prediction_minutes_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "prediction_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      prediction_runs: {
+        Row: {
+          apnea_minutes: number | null
+          apnea_percent: number | null
+          completed_at: string | null
+          created_at: string
+          ecg_upload_id: string
+          error_message: string | null
+          id: string
+          model_id: string
+          progress_percent: number
+          started_at: string | null
+          status: string
+          total_minutes: number | null
+        }
+        Insert: {
+          apnea_minutes?: number | null
+          apnea_percent?: number | null
+          completed_at?: string | null
+          created_at?: string
+          ecg_upload_id: string
+          error_message?: string | null
+          id?: string
+          model_id: string
+          progress_percent?: number
+          started_at?: string | null
+          status?: string
+          total_minutes?: number | null
+        }
+        Update: {
+          apnea_minutes?: number | null
+          apnea_percent?: number | null
+          completed_at?: string | null
+          created_at?: string
+          ecg_upload_id?: string
+          error_message?: string | null
+          id?: string
+          model_id?: string
+          progress_percent?: number
+          started_at?: string | null
+          status?: string
+          total_minutes?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prediction_runs_ecg_upload_id_fkey"
+            columns: ["ecg_upload_id"]
+            isOneToOne: false
+            referencedRelation: "ecg_uploads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "prediction_runs_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "models"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           consent_accepted: boolean
@@ -301,7 +432,7 @@ export type Database = {
       }
       report_pdfs: {
         Row: {
-          approved_at: string | null
+          approved_at: string
           approved_by_name: string | null
           created_at: string
           created_by: string
@@ -310,7 +441,7 @@ export type Database = {
           storage_path: string
         }
         Insert: {
-          approved_at?: string | null
+          approved_at: string
           approved_by_name?: string | null
           created_at?: string
           created_by: string
@@ -319,7 +450,7 @@ export type Database = {
           storage_path: string
         }
         Update: {
-          approved_at?: string | null
+          approved_at?: string
           approved_by_name?: string | null
           created_at?: string
           created_by?: string
@@ -487,12 +618,17 @@ export type Database = {
       get_shared_study: {
         Args: { p_token: string }
         Returns: {
+          apnea_minutes: number
+          apnea_percent: number
+          approved_at: string
           created_at: string
           expires_at: string
           lead_configuration: string
+          patient_explanation: string
           record_code: string
           sampling_rate_hz: number
           status: string
+          total_minutes: number
         }[]
       }
       hook_restrict_signup_domain: { Args: { event: Json }; Returns: Json }
