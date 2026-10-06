@@ -418,7 +418,7 @@ type OverviewProps = {
 
 export function RecordingOverview({ duration, playheadSec, viewStartSec, viewSeconds, timelineHeight = 132, overviewSvg, loading = false, onSeek }: OverviewProps) {
   const [overviewWidth, setOverviewWidth] = useState(0);
-  const progress = useRef(new Animated.Value(0)).current;
+  const [progress] = useState(() => new Animated.Value(0));
   const progressWidth = Math.min(280, Math.max(60, overviewWidth));
   const progressSegment = progressWidth * 0.3;
   const safeDuration = finite(duration) && duration > 0 ? duration : 1;

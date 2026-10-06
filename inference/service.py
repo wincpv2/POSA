@@ -47,7 +47,6 @@ MODEL_NAME = "POSA SE-ResNet50-1D"
 MODEL_VERSION = "epoch-05"
 BUCKET = "ecg-files"
 BATCH_SIZE = 32
-FAILURE_MESSAGE = "Analysis failed. Check that the WFDB recording is valid, then retry."
 
 model = None
 device = None
@@ -338,20 +337,37 @@ def _set_upload_status(upload_id: str, status: str, duration_seconds: int | None
     _storage_client().table("ecg_uploads").update(update).eq("id", upload_id).execute()
 
 
+def _failure_message(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, str) and detail:
+        return detail
+    message = str(getattr(exc, "message", exc)).lower()
+    if "permission denied" in message or "42501" in message:
+        return "The model ran, but Supabase rejected saving its predictions. Check the service-role grants for prediction_runs and prediction_minutes."
+    if isinstance(exc, ValueError):
+        return str(exc)
+    return "Analysis failed while loading the ECG, running the model, or saving results. Check the inference service log and retry."
+
+
 def _process_run(run_id: str, study: dict[str, Any]) -> None:
     upload_id = study["id"]
     client = _storage_client()
     try:
         assert model is not None and device is not None
+        client.table("prediction_runs").update({
+            "status": "processing",
+            "progress_percent": 1,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", run_id).execute()
+        _set_upload_status(upload_id, "processing")
         signal, _, _ = _record_signal(study)
+        client.table("prediction_runs").update({"progress_percent": 2}).eq("id", run_id).execute()
         windows = preprocess_signal(signal)
         total = len(windows)
         duration_seconds = total * 60
         client.table("prediction_runs").update({
-            "status": "processing",
-            "progress_percent": 0,
+            "progress_percent": 4,
             "total_minutes": total,
-            "started_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
         _set_upload_status(upload_id, "processing", duration_seconds)
 
@@ -367,11 +383,12 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
                         "apnea_probability": float(probability),
                         "is_apnea": probability >= APNEA_THRESHOLD,
                     })
-                percent = min(95, int((start + len(probabilities)) * 95 / total))
+                percent = min(90, 4 + int((start + len(probabilities)) * 86 / total))
                 client.table("prediction_runs").update({"progress_percent": percent}).eq("id", run_id).execute()
 
         apnea_minutes = sum(row["is_apnea"] for row in minute_rows)
         apnea_percent = apnea_minutes * 100.0 / total
+        client.table("prediction_runs").update({"progress_percent": 95}).eq("id", run_id).execute()
         for start in range(0, len(minute_rows), 500):
             client.table("prediction_minutes").insert(minute_rows[start : start + 500]).execute()
         client.table("prediction_runs").update({
@@ -389,7 +406,7 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
         try:
             client.table("prediction_runs").update({
                 "status": "failed",
-                "error_message": FAILURE_MESSAGE,
+                "error_message": _failure_message(exc),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
             _set_upload_status(upload_id, "failed")

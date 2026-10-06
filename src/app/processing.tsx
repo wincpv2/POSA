@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components/posa-ui';
 import { useUploadState } from '@/components/posa-state';
@@ -11,6 +11,9 @@ export default function ProcessingScreen() {
   const { study, update } = useUploadState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(study.errorMessage);
+  const [monitorError, setMonitorError] = useState('');
+  const missingRunSince = useRef<number | null>(null);
+  const statusErrorSince = useRef<number | null>(null);
 
   useEffect(() => {
     if (!study.uploadId) {
@@ -18,20 +21,49 @@ export default function ProcessingScreen() {
       return;
     }
     let cancelled = false;
+    let refreshing = false;
     const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
         const run = await getLatestPredictionRun(study.uploadId!);
-        if (!run || cancelled) return;
+        if (cancelled) return;
+        if (!run) {
+          statusErrorSince.current = null;
+          missingRunSince.current ??= Date.now();
+          if (Date.now() - missingRunSince.current >= 20_000) {
+            setMonitorError('No analysis job is visible for this upload yet. Check the connection and retry if this message remains.');
+          }
+          if (Date.now() - missingRunSince.current >= 60_000) {
+            const message = 'The inference worker did not create an analysis job. Check that the service is online, then retry.';
+            setError(message);
+            update({ status: 'failed', errorMessage: message });
+          }
+          return;
+        }
+        missingRunSince.current = null;
+        statusErrorSince.current = null;
+        setMonitorError('');
         update({
           runId: run.id,
           progress: run.progress_percent,
           durationSeconds: (run.total_minutes ?? 0) * 60,
-          status: run.status === 'completed' ? 'ready' : run.status === 'failed' ? 'failed' : 'processing',
+          status: run.status === 'completed' ? 'ready' : run.status === 'failed' ? 'failed' : run.status,
           errorMessage: run.error_message ?? '',
         });
         setError(run.error_message ?? '');
       } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Could not read analysis status.');
+        if (cancelled) return;
+        const message = reason instanceof Error ? reason.message : 'Could not read analysis status.';
+        setMonitorError(`Status check failed: ${message}. Retrying automatically.`);
+        statusErrorSince.current ??= Date.now();
+        if (Date.now() - statusErrorSince.current >= 60_000) {
+          const timeoutMessage = 'Could not reach the status database for 60 seconds. Check the connection, then retry analysis.';
+          setError(timeoutMessage);
+          update({ status: 'failed', errorMessage: timeoutMessage });
+        }
+      } finally {
+        refreshing = false;
       }
     };
     void refresh();
@@ -43,6 +75,9 @@ export default function ProcessingScreen() {
     if (!study.uploadId) return;
     setBusy(true);
     setError('');
+    setMonitorError('');
+    missingRunSince.current = null;
+    statusErrorSince.current = null;
     try {
       const run = await startStudyAnalysis(study.uploadId);
       update({ runId: run.runId, status: run.status === 'completed' ? 'ready' : 'processing', progress: 0, errorMessage: '' });
@@ -62,7 +97,7 @@ export default function ProcessingScreen() {
     <GlassPanel style={styles.panel}>
       <Text style={styles.heading}>{study.studyId} · {study.fileName}</Text>
       <Text style={styles.copy}>{study.sampleRate} Hz · {study.lead || 'First ECG channel'} · {study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''}</Text>
-      {processing ? <><View style={styles.progressRow}><ActivityIndicator color={colors.accent} /><Text style={styles.copy}>{study.status === 'queued' ? 'Waiting for the inference worker' : `Analyzing · ${study.progress}%`}</Text></View><View style={styles.track}><View style={[styles.fill, { width: `${study.progress}%` }]} /></View></> : null}
+      {processing ? <><View style={styles.progressRow}><ActivityIndicator color={colors.accent} /><Text style={styles.copy}>{study.status === 'queued' ? 'Waiting for the inference worker' : study.progress <= 1 ? 'Loading ECG recording' : study.progress <= 4 ? 'Preparing one-minute ECG windows' : study.progress >= 95 ? `Saving predictions · ${study.progress}%` : `Running model inference · ${study.progress}%`}</Text></View><View style={styles.track}><View style={[styles.fill, { width: `${study.progress}%` }]} /></View>{monitorError ? <Text accessibilityRole="alert" style={styles.error}>{monitorError}</Text> : null}</> : null}
       {done ? <Text style={styles.copy}>Predictions are saved and ready for clinician review.</Text> : null}
       {!processing && !done ? <Text accessibilityRole="alert" style={styles.error}>{error || 'Analysis could not finish.'}</Text> : null}
     </GlassPanel>
