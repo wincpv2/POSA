@@ -27,13 +27,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+    let authEventReceived = false;
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      authEventReceived = true;
+      setSession(newSession);
       setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (error) console.warn('Could not restore auth session:', error.message);
+      // A sign-in event may arrive while AsyncStorage is being read. Do not
+      // overwrite that fresh session with the earlier empty snapshot.
+      if (!authEventReceived) setSession(data.session);
+      setLoading(false);
+    }).catch((error: unknown) => {
+      console.warn('Could not restore auth session:', error);
+      setLoading(false);
     });
 
     return () => listener.subscription.unsubscribe();
