@@ -387,6 +387,7 @@ export default function DetailScreen() {
           viewSeconds={viewSeconds}
           timelineHeight={desktop ? 88 : undefined}
           overviewSvg={currentRecordSummary?.charts.screen.fullNightOverviewSvg}
+          loading={run?.status === 'completed' && !currentRecordSummary && !summaryError}
           onSeek={jumpTo}
         />
         {annotationMessage ? <Text style={styles.chartHint}>{annotationMessage}</Text> : null}
