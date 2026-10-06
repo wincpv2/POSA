@@ -5,7 +5,7 @@ import os
 import tempfile
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +35,7 @@ from inference.model import (
     predict_minutes,
     preprocess_signal,
 )
+from inference.xqrs_worker import chunk_windows, core_peaks, detect_xqrs_chunk
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,7 @@ record_summary_cache: OrderedDict[str, tuple[tuple[str | None, str | None, str |
 annotation_cache: dict[str, tuple[tuple[str | None, str | None], np.ndarray, list[dict[str, float]], bool, bool, int, int]] = {}
 CACHE_RECORDS = 2
 FEATURE_CACHE_MINUTES = 24
+MAX_QRS_WORKERS = 2
 
 
 def _settings() -> tuple[str, str, str, str]:
@@ -457,13 +459,27 @@ def _process_prediction_job(run_id: str, study: dict[str, Any]) -> None:
             running_prediction_runs.discard(run_id)
 
 
-def _enqueue_summary(run_id: str, study: dict[str, Any]) -> None:
+def _enqueue_summary(
+    run_id: str,
+    study: dict[str, Any],
+    *,
+    reset_status: bool = False,
+) -> bool:
     with summary_jobs_lock:
         if run_id in active_summary_runs:
-            return
+            return False
         active_summary_runs.add(run_id)
         queued_summary_runs.append(run_id)
     try:
+        if reset_status:
+            admin.table("prediction_runs").update({
+                "summary_status": "queued",
+                "summary_progress_percent": 0,
+                "summary_stage": "Queued for full-night ECG summary",
+                "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+                "summary_error_message": None,
+                "summary_result": None,
+            }).eq("id", run_id).execute()
         summary_worker.submit(_process_summary, run_id, study)
     except Exception:
         with summary_jobs_lock:
@@ -471,6 +487,7 @@ def _enqueue_summary(run_id: str, study: dict[str, Any]) -> None:
             if run_id in queued_summary_runs:
                 queued_summary_runs.remove(run_id)
         raise
+    return True
 
 
 def _process_summary(run_id: str, study: dict[str, Any]) -> None:
@@ -561,6 +578,32 @@ def _recover_worker_queue() -> None:
             logger.info("Recovered full-night ECG summaries: %s", len(summaries))
     except Exception:
         logger.exception("Could not recover persisted inference jobs at startup")
+
+
+def _detect_full_night_xqrs(
+    filtered_record: np.ndarray,
+    progress: Any | None = None,
+) -> np.ndarray:
+    windows = chunk_windows(len(filtered_record), SAMPLE_RATE_HZ)
+    if not windows:
+        return np.empty(0, dtype=np.int64)
+    max_workers = min(MAX_QRS_WORKERS, max(1, (os.cpu_count() or 1) - 1))
+    peaks_by_chunk: list[np.ndarray] = []
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for core_start, core_end, input_start, input_end in windows:
+            chunk = np.ascontiguousarray(filtered_record[input_start:input_end])
+            future = pool.submit(detect_xqrs_chunk, chunk, SAMPLE_RATE_HZ)
+            futures[future] = (core_start, core_end, input_start)
+        for completed, future in enumerate(as_completed(futures), 1):
+            core_start, core_end, input_start = futures[future]
+            peaks = core_peaks(future.result(), input_start, core_start, core_end)
+            if len(peaks):
+                peaks_by_chunk.append(peaks)
+            if progress:
+                percent = 38 + int(29 * completed / len(windows))
+                progress(f"Detecting R peaks ({completed}/{len(windows)} chunks)", min(67, percent))
+    return np.unique(np.concatenate(peaks_by_chunk)) if peaks_by_chunk else np.empty(0, dtype=np.int64)
 
 
 class torch_inference_context:
@@ -840,17 +883,25 @@ def start_study_summary(
         raise HTTPException(status_code=409, detail="Model predictions are not ready yet.")
     run = runs[0]
     state = run.get("summary_status") or "not_started"
-    if refresh or state in {"failed", "not_started"}:
-        client.table("prediction_runs").update({
-            "summary_status": "queued",
-            "summary_progress_percent": 0,
-            "summary_stage": "Queued for full-night ECG summary",
-            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
-            "summary_error_message": None,
-            "summary_result": None,
-        }).eq("id", run["id"]).execute()
-        _enqueue_summary(run["id"], study)
-        state = "queued"
+    if refresh or state in {"failed", "not_started", "queued", "processing"}:
+        queued = _enqueue_summary(run["id"], study, reset_status=True)
+        if queued:
+            state = "queued"
+            run = {
+                **run,
+                "summary_progress_percent": 0,
+                "summary_stage": "Queued for full-night ECG summary",
+                "summary_error_message": None,
+            }
+        else:
+            # Another request already owns this run. Return its live persisted stage
+            # instead of resetting a running job back to the queued state.
+            current = client.table("prediction_runs").select(
+                "id,status,summary_status,summary_progress_percent,summary_stage,summary_error_message"
+            ).eq("id", run["id"]).limit(1).execute().data or []
+            if current:
+                run = current[0]
+                state = run.get("summary_status") or state
     return {
         "runId": run["id"], "status": state,
         "progressPercent": run.get("summary_progress_percent") or 0,
@@ -911,11 +962,11 @@ def _build_record_summary(
     if peaks is None:
         if progress: progress("Detecting R peaks for HR/HRV (full-night step)", 38)
         try:
-            peaks = np.asarray(processing.xqrs_detect(filtered_record, fs=SAMPLE_RATE_HZ, verbose=False), dtype=np.int64)
+            peaks = _detect_full_night_xqrs(filtered_record, progress)
             peaks = _refine_r_peaks(filtered_record, peaks)
         except Exception as exc:
-            logger.info("Whole-record QRS detection unavailable for %s (%s)", upload_id, type(exc).__name__)
-            peaks = np.empty(0, dtype=np.int64)
+            logger.exception("Chunked XQRS detection failed for %s (%s)", upload_id, type(exc).__name__)
+            raise RuntimeError("Full-night R-peak detection failed. Retry the summary after checking the inference server.") from exc
     if progress: progress("Calculating heart-rate and HRV statistics", 68)
     heart_rate_by_minute: list[dict[str, float | int]] = []
     for minute in range((len(signal) + WINDOW_SAMPLES - 1) // WINDOW_SAMPLES):
