@@ -40,9 +40,10 @@ export type PredictionRun = {
   summary_progress_percent: number;
   summary_stage: string | null;
   summary_error_message: string | null;
+  summary_updated_at: string | null;
 };
 
-const predictionRunFields = 'id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at, summary_status, summary_progress_percent, summary_stage, summary_error_message';
+const predictionRunFields = 'id, ecg_upload_id, model_id, status, progress_percent, total_minutes, apnea_minutes, apnea_percent, error_message, created_at, summary_status, summary_progress_percent, summary_stage, summary_error_message, summary_updated_at';
 
 export type PredictionMinute = {
   run_id: string;

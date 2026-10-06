@@ -5,9 +5,19 @@ import { AppButton, GlassPanel, PageIntro, PosaText as Text } from '@/components
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { getRecordTimelineCached, getSignalMinuteCached, startRecordSummary, startStudyAnalysis } from '@/lib/inference';
+import { getRecordTimelineCached, getSignalMinuteCached, getStudyDiagnostics, startRecordSummary, startStudyAnalysis, type StudyDiagnostics } from '@/lib/inference';
 import { writeRecentUploadsCache, writeStudyReviewCache } from '@/lib/offline-cache';
 import { getLatestPredictionRun, getStudyReport, listPredictionMinutes, listRecentEcgUploads, type PredictionRun } from '@/lib/queries';
+
+type DiagnosticLogEntry = { time: string; message: string };
+
+function ageSince(timestamp: string | null | undefined) {
+  if (!timestamp) return 'not recorded';
+  const date = Date.parse(timestamp);
+  if (!Number.isFinite(date)) return 'invalid timestamp';
+  const seconds = Math.max(0, Math.floor((Date.now() - date) / 1000));
+  return seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ${seconds % 60}s ago`;
+}
 
 export default function ProcessingScreen() {
   const { study, update, offlineDownload, retryOfflineDownload } = useUploadState();
@@ -16,6 +26,10 @@ export default function ProcessingScreen() {
   const [error, setError] = useState(study.errorMessage);
   const [monitorError, setMonitorError] = useState('');
   const [run, setRun] = useState<PredictionRun | null>(null);
+  const [diagnostics, setDiagnostics] = useState<StudyDiagnostics | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState('');
+  const [diagnosticConnection, setDiagnosticConnection] = useState<'checking' | 'reachable' | 'unreachable' | 'response-error'>('checking');
+  const [diagnosticLog, setDiagnosticLog] = useState<DiagnosticLogEntry[]>([]);
   const [timelineState, setTimelineState] = useState<'waiting' | 'loading' | 'ready' | 'failed'>('waiting');
   const [signalState, setSignalState] = useState<'waiting' | 'loading' | 'ready' | 'failed'>('waiting');
   const missingRunSince = useRef<number | null>(null);
@@ -24,7 +38,15 @@ export default function ProcessingScreen() {
   const summaryRun = useRef('');
   const recentCacheRun = useRef('');
   const reviewCacheRun = useRef('');
+  const diagnosticKeys = useRef(new Set<string>());
   const userId = session?.user.id;
+
+  const logDiagnostic = useCallback((key: string, message: string) => {
+    if (diagnosticKeys.current.has(key)) return;
+    diagnosticKeys.current.add(key);
+    if (diagnosticKeys.current.size > 200) diagnosticKeys.current.delete(diagnosticKeys.current.values().next().value!);
+    setDiagnosticLog((items) => [{ time: new Date().toLocaleTimeString(), message }, ...items].slice(0, 30));
+  }, []);
 
   const loadDetailData = useCallback((uploadId: string, runId: string) => {
     if (!userId) return;
@@ -48,6 +70,7 @@ export default function ProcessingScreen() {
         const run = await getLatestPredictionRun(study.uploadId!);
         if (cancelled) return;
         if (!run) {
+          logDiagnostic('prediction:no-run', 'Supabase status query succeeded, but no prediction run is visible for this upload.');
           statusErrorSince.current = null;
           missingRunSince.current ??= Date.now();
           if (Date.now() - missingRunSince.current >= 20_000) {
@@ -64,6 +87,8 @@ export default function ProcessingScreen() {
         statusErrorSince.current = null;
         setMonitorError('');
         setRun(run);
+        logDiagnostic(`prediction:${run.id}:${run.status}:${run.progress_percent}`, `Prediction run ${run.id.slice(0, 8)}: ${run.status}, ${run.progress_percent}%.`);
+        logDiagnostic(`summary:${run.id}:${run.summary_status}:${run.summary_progress_percent}:${run.summary_stage}`, `Full-night summary: ${run.summary_status}, ${run.summary_progress_percent}%, stage=${run.summary_stage || 'not set'}.`);
         update({
           runId: run.id,
           progress: run.progress_percent,
@@ -95,6 +120,7 @@ export default function ProcessingScreen() {
       } catch (reason) {
         if (cancelled) return;
         const message = reason instanceof Error ? reason.message : 'Could not read analysis status.';
+        logDiagnostic(`status-error:${message}`, `Supabase prediction status poll failed: ${message}`);
         setMonitorError(`Status check failed: ${message}. Retrying automatically.`);
         statusErrorSince.current ??= Date.now();
         if (Date.now() - statusErrorSince.current >= 60_000) {
@@ -109,7 +135,45 @@ export default function ProcessingScreen() {
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [study.uploadId, update, loadDetailData, userId]);
+  }, [study.uploadId, update, loadDetailData, userId, logDiagnostic]);
+
+  useEffect(() => {
+    if (!study.uploadId) return;
+    let cancelled = false;
+    let refreshing = false;
+    const refreshDiagnostics = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12_000);
+      try {
+        const next = await getStudyDiagnostics(study.uploadId!, controller.signal);
+        if (cancelled) return;
+        setDiagnostics(next);
+        setDiagnosticError('');
+        setDiagnosticConnection('reachable');
+        logDiagnostic(`service:${next.service.modelLoaded}:${next.service.databaseConfigured}`, `Inference API reachable; Supabase diagnostics query succeeded; model loaded=${next.service.modelLoaded}; database configured=${next.service.databaseConfigured}; ${next.service.version}.`);
+        if (next.run) {
+          logDiagnostic(`summary-heartbeat:${next.run.summaryStatus}:${next.run.summaryStage}:${next.run.summaryProgressPercent}:${next.run.summaryUpdatedAt}`, `Summary DB state=${next.run.summaryStatus}; stage=${next.run.summaryStage || 'not set'}; progress=${next.run.summaryProgressPercent}%; last DB update=${ageSince(next.run.summaryUpdatedAt)}.`);
+        }
+        const worker = next.summaryWorker;
+        logDiagnostic(`worker:${worker.runState}:${worker.queuePosition}:${worker.queuedJobs}:${worker.runningJobs}`, `Local summary worker: this run=${worker.runState}${worker.queuePosition ? ` at queue position ${worker.queuePosition}` : ''}; running=${worker.runningJobs}; queued=${worker.queuedJobs}; workers=${worker.configuredWorkers}.`);
+      } catch (reason) {
+        if (cancelled) return;
+        const message = controller.signal.aborted ? 'Inference diagnostics request timed out after 12 seconds.' : reason instanceof Error ? reason.message : 'Unknown diagnostics request error.';
+        const networkFailure = controller.signal.aborted || reason instanceof TypeError || /failed to fetch|network request failed|load failed/i.test(message);
+        setDiagnosticConnection(networkFailure ? 'unreachable' : 'response-error');
+        setDiagnosticError(message);
+        logDiagnostic(`diagnostics-error:${message}`, `Inference diagnostics request failed: ${message}`);
+      } finally {
+        clearTimeout(timeout);
+        refreshing = false;
+      }
+    };
+    void refreshDiagnostics();
+    const timer = setInterval(() => { void refreshDiagnostics(); }, 10_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [study.uploadId, logDiagnostic]);
 
   const retry = async () => {
     if (!study.uploadId) return;
@@ -170,6 +234,20 @@ export default function ProcessingScreen() {
       </View> : null}
       {!processing && !done ? <Text accessibilityRole="alert" style={styles.error}>{error || 'Analysis could not finish.'}</Text> : null}
     </GlassPanel>
+    <GlassPanel style={styles.diagnosticsPanel}>
+      <Text style={styles.heading}>Technical diagnostic log</Text>
+      <Text style={styles.copy}>Inference API: {diagnosticConnection} · Model: {diagnostics ? (diagnostics.service.modelLoaded ? 'loaded' : 'not loaded') : 'unknown'} · Version: {diagnostics?.service.version || 'unknown'}</Text>
+      <Text style={styles.copy}>Status database: {monitorError ? `poll error · ${monitorError}` : diagnostics ? 'diagnostic query succeeded' : diagnosticError || 'checking'}</Text>
+      {diagnostics?.run ? <>
+        <Text style={styles.copy}>Prediction: {diagnostics.run.status} · {diagnostics.run.progressPercent}%{diagnostics.run.error ? ` · error: ${diagnostics.run.error}` : ''}</Text>
+        <Text style={styles.copy}>Summary: {diagnostics.run.summaryStatus} · {diagnostics.run.summaryProgressPercent}% · {diagnostics.run.summaryStage || 'stage not set'} · last DB update {ageSince(diagnostics.run.summaryUpdatedAt)}</Text>
+        {diagnostics.run.summaryError ? <Text accessibilityRole="alert" style={styles.error}>Summary error: {diagnostics.run.summaryError}</Text> : null}
+        <Text style={styles.copy}>Local summary worker: {diagnostics.summaryWorker.runState}{diagnostics.summaryWorker.queuePosition ? ` · queue position ${diagnostics.summaryWorker.queuePosition}` : ''} · {diagnostics.summaryWorker.runningJobs} running · {diagnostics.summaryWorker.queuedJobs} queued</Text>
+        {diagnostics.summaryWorker.runState === 'not_registered' ? <Text style={styles.error}>The database says this summary is queued/processing, but this inference server has not registered it in its local worker queue.</Text> : null}
+      </> : <Text style={styles.copy}>No run diagnostics returned yet.</Text>}
+      <Text style={styles.logHeading}>Recent events (newest first)</Text>
+      {diagnosticLog.length ? diagnosticLog.map((entry, index) => <Text key={`${entry.time}-${index}`} style={styles.logText}>[{entry.time}] {entry.message}</Text>) : <Text style={styles.copy}>Waiting for the first status check.</Text>}
+    </GlassPanel>
     <View style={styles.actions}>
       {done ? <AppButton disabled={signalState === 'loading' || timelineState === 'loading' || signalState === 'waiting' || timelineState === 'waiting'} onPress={() => router.push('/detail')}><Text style={styles.primary}>Open ECG and predictions</Text></AppButton>
         : processing ? <AppButton variant="quiet" onPress={() => router.replace('/')}><Text style={styles.link}>Return home while analysis continues</Text></AppButton>
@@ -182,7 +260,7 @@ export default function ProcessingScreen() {
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   page: { width: '100%', maxWidth: 900, alignSelf: 'center', padding: 20, paddingTop: 24, paddingBottom: 56, gap: 18 },
-  panel: { gap: 12 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, secondaryWork: { gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }, offlineBlock: { gap: 8, marginTop: 4 },
+  panel: { gap: 12 }, diagnosticsPanel: { gap: 8 }, heading: { color: colors.text, fontSize: 18, fontWeight: '800' }, logHeading: { color: colors.text, fontSize: 14, fontWeight: '800', marginTop: 8 }, logText: { color: colors.muted, fontSize: 12, lineHeight: 18, fontFamily: 'monospace' }, secondaryWork: { gap: 8, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }, offlineBlock: { gap: 8, marginTop: 4 },
   copy: { color: colors.text, fontSize: 14, lineHeight: 21 },
   progressRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 10 },
   track: { height: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.14)', overflow: 'hidden' },

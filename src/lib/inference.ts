@@ -60,6 +60,31 @@ export type RecordSummary = {
 type AnalysisStart = { runId: string; status: 'queued' | 'processing' | 'completed' };
 export type RecordTimeline = { uploadId: string; runId: string; durationSeconds: number; source: 'model_prediction'; svg: string };
 export type SummaryJob = { runId: string; status: 'not_started' | 'queued' | 'processing' | 'completed' | 'failed'; progressPercent: number; stage: string | null; error: string | null };
+export type StudyDiagnostics = {
+  checkedAt: string;
+  service: { modelLoaded: boolean; databaseConfigured: boolean; model: string; version: string };
+  run: null | {
+    id: string;
+    status: string;
+    progressPercent: number;
+    error: string | null;
+    summaryStatus: string;
+    summaryProgressPercent: number;
+    summaryStage: string | null;
+    summaryError: string | null;
+    summaryUpdatedAt: string | null;
+  };
+  summaryWorker: { configuredWorkers: number; runningJobs: number; queuedJobs: number; runState: 'running' | 'queued' | 'not_registered' | 'idle'; queuePosition: number | null };
+};
+export type InferenceHealth = {
+  checkedAt: string;
+  ok: boolean;
+  api: { ok: boolean; version: string };
+  model: { ok: boolean; name: string; version: string; device: string | null };
+  supabase: { ok: boolean; error: string | null };
+  predictionWorker: { ok: boolean; queued: number; running: number; workers: number };
+  summaryWorker: { ok: boolean; queued: number; running: number; workers: number };
+};
 
 export type OfflineSignalProgress = {
   status: 'checking' | 'downloading' | 'ready';
@@ -97,6 +122,14 @@ async function request(path: string, init: RequestInit = {}) {
 
 export function startStudyAnalysis(uploadId: string) {
   return request(`/v1/studies/${encodeURIComponent(uploadId)}/analysis`, { method: 'POST' }) as Promise<AnalysisStart>;
+}
+
+export function getStudyDiagnostics(uploadId: string, signal?: AbortSignal) {
+  return request(`/v1/studies/${encodeURIComponent(uploadId)}/diagnostics`, { signal }) as Promise<StudyDiagnostics>;
+}
+
+export function getInferenceHealth(signal?: AbortSignal) {
+  return request('/v1/health', { signal }) as Promise<InferenceHealth>;
 }
 
 export function getSignalMinute(uploadId: string, minute: number, mode: 'raw' | 'filtered' = 'raw', signal?: AbortSignal) {

@@ -52,12 +52,18 @@ model = None
 device = None
 model_id: str | None = None
 admin: Client | None = None
+workers_ready = False
 worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="posa-inference")
 summary_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="posa-summary")
 cache_lock = threading.Lock()
 chart_lock = threading.Lock()
+prediction_jobs_lock = threading.Lock()
+queued_prediction_runs: list[str] = []
+running_prediction_runs: set[str] = set()
 summary_jobs_lock = threading.Lock()
 active_summary_runs: set[str] = set()
+queued_summary_runs: list[str] = []
+running_summary_runs: set[str] = set()
 signal_cache: OrderedDict[str, tuple[np.ndarray, str, str]] = OrderedDict()
 filtered_record_cache: OrderedDict[str, np.ndarray] = OrderedDict()
 signal_feature_cache: OrderedDict[tuple[str, int, str], tuple[np.ndarray, np.ndarray, int | None]] = OrderedDict()
@@ -406,6 +412,7 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
             "summary_status": "queued",
             "summary_progress_percent": 0,
             "summary_stage": "Waiting for full-night ECG summary",
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
             "summary_error_message": None,
             "summary_result": None,
         }).eq("id", run_id).execute()
@@ -424,47 +431,93 @@ def _process_run(run_id: str, study: dict[str, Any]) -> None:
             logger.exception("Could not persist failure state for run %s", run_id)
 
 
+def _enqueue_prediction(run_id: str, study: dict[str, Any]) -> None:
+    with prediction_jobs_lock:
+        if run_id in queued_prediction_runs or run_id in running_prediction_runs:
+            return
+        queued_prediction_runs.append(run_id)
+    try:
+        worker.submit(_process_prediction_job, run_id, study)
+    except Exception:
+        with prediction_jobs_lock:
+            if run_id in queued_prediction_runs:
+                queued_prediction_runs.remove(run_id)
+        raise
+
+
+def _process_prediction_job(run_id: str, study: dict[str, Any]) -> None:
+    with prediction_jobs_lock:
+        if run_id in queued_prediction_runs:
+            queued_prediction_runs.remove(run_id)
+        running_prediction_runs.add(run_id)
+    try:
+        _process_run(run_id, study)
+    finally:
+        with prediction_jobs_lock:
+            running_prediction_runs.discard(run_id)
+
+
 def _enqueue_summary(run_id: str, study: dict[str, Any]) -> None:
     with summary_jobs_lock:
         if run_id in active_summary_runs:
             return
         active_summary_runs.add(run_id)
-    summary_worker.submit(_process_summary, run_id, study)
+        queued_summary_runs.append(run_id)
+    try:
+        summary_worker.submit(_process_summary, run_id, study)
+    except Exception:
+        with summary_jobs_lock:
+            active_summary_runs.discard(run_id)
+            if run_id in queued_summary_runs:
+                queued_summary_runs.remove(run_id)
+        raise
 
 
 def _process_summary(run_id: str, study: dict[str, Any]) -> None:
-    client = _storage_client()
+    client: Client | None = None
+    with summary_jobs_lock:
+        if run_id in queued_summary_runs:
+            queued_summary_runs.remove(run_id)
+        running_summary_runs.add(run_id)
 
     def progress(stage: str, percent: int) -> None:
         client.table("prediction_runs").update({
             "summary_status": "processing",
             "summary_stage": stage,
             "summary_progress_percent": percent,
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
+        logger.info("Full-night summary progress run=%s stage=%s percent=%s", run_id, stage, percent)
 
     try:
+        client = _storage_client()
         progress("Loading full-night ECG", 5)
         result = _build_record_summary(study["id"], study, progress)
         client.table("prediction_runs").update({
             "summary_status": "completed",
             "summary_stage": "Full-night summary ready",
             "summary_progress_percent": 100,
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
             "summary_error_message": None,
             "summary_result": result,
         }).eq("id", run_id).execute()
+        logger.info("Full-night summary completed run=%s", run_id)
     except Exception as exc:
         logger.exception("Full-night summary failed for run %s (%s)", run_id, type(exc).__name__)
-        try:
-            client.table("prediction_runs").update({
-                "summary_status": "failed",
-                "summary_stage": "Full-night summary failed",
-                "summary_error_message": _failure_message(exc),
-            }).eq("id", run_id).execute()
-        except Exception:
-            logger.exception("Could not persist summary failure for run %s", run_id)
+        if client is not None:
+            try:
+                client.table("prediction_runs").update({
+                    "summary_status": "failed",
+                    "summary_stage": "Full-night summary failed",
+                    "summary_updated_at": datetime.now(timezone.utc).isoformat(),
+                    "summary_error_message": _failure_message(exc),
+                }).eq("id", run_id).execute()
+            except Exception:
+                logger.exception("Could not persist summary failure for run %s", run_id)
     finally:
         with summary_jobs_lock:
             active_summary_runs.discard(run_id)
+            running_summary_runs.discard(run_id)
 
 
 def _recover_worker_queue() -> None:
@@ -492,15 +545,15 @@ def _recover_worker_queue() -> None:
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 }).eq("id", run["id"]).execute()
                 continue
-            worker.submit(_process_run, run["id"], study)
+            _enqueue_prediction(run["id"], study)
         summaries = client.table("prediction_runs").select("id,ecg_upload_id").eq("status", "completed").in_("summary_status", ["queued", "processing"]).order("created_at").limit(100).execute().data or []
         for run in summaries:
             response = client.table("ecg_uploads").select(fields).eq("id", run["ecg_upload_id"]).maybe_single().execute()
             study = response.data
             if not study or study.get("deleted_at"):
-                client.table("prediction_runs").update({"summary_status": "failed", "summary_stage": "Study unavailable", "summary_error_message": "The uploaded study is unavailable."}).eq("id", run["id"]).execute()
+                client.table("prediction_runs").update({"summary_status": "failed", "summary_stage": "Study unavailable", "summary_updated_at": datetime.now(timezone.utc).isoformat(), "summary_error_message": "The uploaded study is unavailable."}).eq("id", run["id"]).execute()
                 continue
-            client.table("prediction_runs").update({"summary_status": "queued", "summary_stage": "Resuming full-night ECG summary"}).eq("id", run["id"]).execute()
+            client.table("prediction_runs").update({"summary_status": "queued", "summary_stage": "Resuming full-night ECG summary", "summary_updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", run["id"]).execute()
             _enqueue_summary(run["id"], study)
         if interrupted or queued:
             logger.info("Recovered inference queue: %s interrupted, %s queued", len(interrupted), len(queued))
@@ -525,7 +578,7 @@ class torch_inference_context:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global model, device, admin, model_id
+    global model, device, admin, model_id, workers_ready
     model_path, supabase_url, _, service_key = _settings()
     model, device = load_model(model_path)
     admin = create_client(supabase_url, service_key)
@@ -539,8 +592,10 @@ async def lifespan(_: FastAPI):
     }, on_conflict="name,version").execute()
     model_id = registered.data[0]["id"]
     _recover_worker_queue()
+    workers_ready = True
     logger.info("Loaded %s %s on %s", MODEL_NAME, MODEL_VERSION, device)
     yield
+    workers_ready = False
     worker.shutdown(wait=False, cancel_futures=True)
     summary_worker.shutdown(wait=False, cancel_futures=True)
 
@@ -562,6 +617,97 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str | bool]:
     return {"ok": model is not None and admin is not None, "model": MODEL_NAME, "version": MODEL_VERSION}
+
+
+@app.get("/v1/health")
+def detailed_health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    client = _storage_client()
+    try:
+        if client.auth.get_user(token).user is None:
+            raise HTTPException(status_code=401, detail="Your session expired. Sign in again.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.info("Server status auth check failed (%s)", type(exc).__name__)
+        raise HTTPException(status_code=401, detail="Could not validate your session with Supabase.") from exc
+
+    database_error = None
+    try:
+        client.table("prediction_runs").select("id").limit(1).execute()
+    except Exception as exc:
+        database_error = type(exc).__name__
+        logger.exception("Server status Supabase check failed (%s)", database_error)
+
+    with prediction_jobs_lock:
+        prediction_queued = len(queued_prediction_runs)
+        prediction_running = len(running_prediction_runs)
+    with summary_jobs_lock:
+        summary_queued = len(queued_summary_runs)
+        summary_running = len(running_summary_runs)
+
+    model_loaded = model is not None
+    return {
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "ok": workers_ready and model_loaded and database_error is None,
+        "api": {"ok": True, "version": "1.0.0"},
+        "model": {"ok": model_loaded, "name": MODEL_NAME, "version": MODEL_VERSION, "device": str(device) if device is not None else None},
+        "supabase": {"ok": database_error is None, "error": database_error},
+        "predictionWorker": {"ok": workers_ready, "queued": prediction_queued, "running": prediction_running, "workers": 1},
+        "summaryWorker": {"ok": workers_ready, "queued": summary_queued, "running": summary_running, "workers": 1},
+    }
+
+
+@app.get("/v1/studies/{upload_id}/diagnostics")
+def study_diagnostics(upload_id: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    _authorized_study(upload_id, token)
+    client = _storage_client()
+    try:
+        runs = client.table("prediction_runs").select(
+            "id,status,progress_percent,error_message,summary_status,summary_progress_percent,summary_stage,summary_error_message,summary_updated_at"
+        ).eq("ecg_upload_id", upload_id).order("created_at", desc=True).limit(1).execute().data or []
+    except Exception as exc:
+        logger.exception("Could not read study diagnostics (%s)", type(exc).__name__)
+        raise HTTPException(status_code=503, detail=f"Supabase diagnostics query failed ({type(exc).__name__}).") from exc
+
+    run = runs[0] if runs else None
+    run_id = run["id"] if run else None
+    with summary_jobs_lock:
+        queued_count = len(queued_summary_runs)
+        running_count = len(running_summary_runs)
+        queue_position = queued_summary_runs.index(run_id) + 1 if run_id in queued_summary_runs else None
+        if run_id in running_summary_runs:
+            local_summary_state = "running"
+        elif run_id in queued_summary_runs:
+            local_summary_state = "queued"
+        elif run and run.get("summary_status") in {"queued", "processing"}:
+            local_summary_state = "not_registered"
+        else:
+            local_summary_state = "idle"
+
+    return {
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "service": {"modelLoaded": model is not None, "databaseConfigured": admin is not None, "model": MODEL_NAME, "version": MODEL_VERSION},
+        "run": ({
+            "id": run_id,
+            "status": run.get("status"),
+            "progressPercent": run.get("progress_percent"),
+            "error": run.get("error_message"),
+            "summaryStatus": run.get("summary_status"),
+            "summaryProgressPercent": run.get("summary_progress_percent"),
+            "summaryStage": run.get("summary_stage"),
+            "summaryError": run.get("summary_error_message"),
+            "summaryUpdatedAt": run.get("summary_updated_at"),
+        } if run else None),
+        "summaryWorker": {
+            "configuredWorkers": 1,
+            "runningJobs": running_count,
+            "queuedJobs": queued_count,
+            "runState": local_summary_state,
+            "queuePosition": queue_position,
+        },
+    }
 
 
 @app.post("/v1/studies/{upload_id}/analysis", status_code=202)
@@ -586,7 +732,7 @@ def start_analysis(upload_id: str, authorization: str | None = Header(default=No
     }).execute()
     run_id = inserted.data[0]["id"]
     _set_upload_status(upload_id, "processing")
-    worker.submit(_process_run, run_id, study)
+    _enqueue_prediction(run_id, study)
     return {"runId": run_id, "status": "queued"}
 
 
@@ -699,6 +845,7 @@ def start_study_summary(
             "summary_status": "queued",
             "summary_progress_percent": 0,
             "summary_stage": "Queued for full-night ECG summary",
+            "summary_updated_at": datetime.now(timezone.utc).isoformat(),
             "summary_error_message": None,
             "summary_result": None,
         }).eq("id", run["id"]).execute()

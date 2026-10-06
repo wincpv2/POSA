@@ -367,6 +367,7 @@ export type Database = {
           summary_progress_percent: number
           summary_stage: string | null
           summary_error_message: string | null
+          summary_updated_at: string | null
           summary_result: Json | null
         }
         Insert: {
@@ -386,6 +387,7 @@ export type Database = {
           summary_progress_percent?: number
           summary_stage?: string | null
           summary_error_message?: string | null
+          summary_updated_at?: string | null
           summary_result?: Json | null
         }
         Update: {
@@ -405,6 +407,7 @@ export type Database = {
           summary_progress_percent?: number
           summary_stage?: string | null
           summary_error_message?: string | null
+          summary_updated_at?: string | null
           summary_result?: Json | null
         }
         Relationships: [
