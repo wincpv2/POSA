@@ -2,9 +2,6 @@
   "build": {
     "preview": {
       "distribution": "internal",
-      "env": {
-        "EXPO_PUBLIC_INFERENCE_API_URL": "https://anderson-intl-dow-albuquerque.trycloudflare.com"
-      },
       "android": {
         "buildType": "apk"
       }
