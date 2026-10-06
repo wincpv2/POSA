@@ -54,7 +54,7 @@ function Workspace() {
         // Step 2: Reverse on new tab (expand horizontally from 0 to 1)
         setShrinkingTab(null);
         setDisplayedLayoutTab(pathname);
-      }, 150);
+      }, 280);
       return () => clearTimeout(timer);
     } else {
       setShrinkingTab(null);
@@ -69,6 +69,35 @@ function Workspace() {
   const [serverRefreshKey, setServerRefreshKey] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [fullscreenError, setFullscreenError] = useState('');
+  const [routeEnter] = useState(() => new Animated.Value(0));
+  const [routeExit] = useState(() => new Animated.Value(0));
+  const previousPathRef = useRef(pathname);
+
+  useEffect(() => {
+    const previousPath = previousPathRef.current;
+    const previousIndex = navItems.findIndex((item) => item.href === previousPath);
+    const currentIndex = navItems.findIndex((item) => item.href === pathname);
+    const direction = currentIndex >= 0 && previousIndex >= 0 ? (currentIndex > previousIndex ? 1 : -1) : 0;
+
+    previousPathRef.current = pathname;
+    routeEnter.setValue(direction * 180);
+    routeExit.setValue(direction * -48);
+
+    Animated.parallel([
+      Animated.timing(routeEnter, {
+        toValue: 0,
+        duration: 600,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+      Animated.timing(routeExit, {
+        toValue: 0,
+        duration: 600,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: Platform.OS !== 'web',
+      }),
+    ]).start();
+  }, [pathname, routeEnter, routeExit]);
 
   useEffect(() => {
     if (!desktopWeb || typeof document === 'undefined') return;
@@ -131,6 +160,7 @@ function Workspace() {
   }
   const email = session?.user?.email ?? '';
   const displayName: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
+  const compactHeaderCase = width < 980;
   const nextRequired = study.status === 'ready' && study.reportStatus === 'Approved' ? null
     : study.status === 'empty' || study.status === 'uploaded' ? '/upload'
       : study.status === 'processing' || study.status === 'failed' ? '/processing'
@@ -144,8 +174,15 @@ function Workspace() {
     <StatusBar style="light" />
     <View style={styles.header}>
       <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
-        <PosaMark size={28} /><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
+        <PosaMark size={28} style={{ transform: [{ rotate: '360deg' }] }} /><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
       </Pressable></Link>
+      {!compactHeaderCase ? (
+        <View style={styles.headerCaseWrap}>
+          <View style={styles.caseChipHeader}>
+            <PosaText style={styles.case}>{caseLine}</PosaText>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.headerActions}>
         <Pressable accessibilityRole="button" accessibilityLabel="Open server status" accessibilityState={{ expanded: serverMenuOpen }} onPress={() => { setMenuOpen(false); setServerMenuOpen((open) => !open); }} style={[styles.serverButton, serverMenuOpen && styles.avatarOpen]}>
           <View style={[styles.serverDot, { backgroundColor: serverHealth?.ok && !serverError ? '#4ADE80' : serverError || serverHealth ? colors.coral : colors.muted }]} />
@@ -155,13 +192,28 @@ function Workspace() {
         <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${displayName}. Open account menu`} accessibilityState={{ expanded: menuOpen }} onPress={() => { setServerMenuOpen(false); setMenuOpen((open) => !open); }} style={[styles.avatar, menuOpen && styles.avatarOpen]}><PosaText style={styles.avatarText}>{initialsOf(displayName)}</PosaText></Pressable>
       </View>
     </View>
-    <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
-      <View style={styles.caseChip}>
-        <PosaText style={styles.case}>{caseLine}</PosaText>
+    {!compactHeaderCase ? (
+      <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
+        <View style={styles.notice}><PosaText style={styles.noticeText}>ECG recordings are stored privately. Analysis results are available for clinician review.</PosaText></View>
       </View>
-      <View style={styles.notice}><PosaText style={styles.noticeText}>ECG recordings are stored privately. Analysis results are available for clinician review.</PosaText></View>
+    ) : (
+      <View style={[styles.contentTop, width < 500 && styles.contentTopCompact]}>
+        <View style={styles.caseChip}>
+          <PosaText style={styles.case}>{caseLine}</PosaText>
+        </View>
+        <View style={styles.notice}><PosaText style={styles.noticeText}>ECG recordings are stored privately. Analysis results are available for clinician review.</PosaText></View>
+      </View>
+    )}
+    <View style={styles.route}>
+      <LinearGradient pointerEvents="none" colors={['rgba(13, 32, 109, 0.9)', 'rgba(24, 46, 135, 0)']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 0.5 }} style={styles.routeFadeTop} />
+      <LinearGradient pointerEvents="none" colors={['rgba(2, 3, 58, 0)', 'hsla(203, 93%, 35%, 0.82)']} start={{ x: 0, y: 0.5 }} end={{ x: 0, y: 1 }} style={styles.routeFadeBottom} />
+      <Animated.View style={[styles.routeContent, {
+        transform: [{ translateX: Animated.add(routeEnter, routeExit) }],
+        opacity: routeEnter.interpolate({ inputRange: [-180, 0, 180], outputRange: [0, 1, 0] }),
+      }]}>
+        <Slot />
+      </Animated.View>
     </View>
-    <View style={styles.route}><Slot /></View>
     <View pointerEvents="box-none" style={styles.dockAnchor}>
       <View accessibilityRole="list" accessibilityLabel="Main navigation" style={[styles.dock, Platform.OS === 'web' && ({ backdropFilter: 'blur(18px)' } as unknown as ViewStyle)]}>
         {navItems.map((item) => {
@@ -231,7 +283,7 @@ function DockNavItem({
     if (isShrinking) {
       Animated.timing(anim, {
         toValue: 0,
-        duration: 150,
+        duration: 280,
         easing: Easing.in(Easing.cubic),
         useNativeDriver: Platform.OS !== 'web',
       }).start();
@@ -350,8 +402,10 @@ export default function PosaShell() { return <UploadProvider><Workspace /></Uplo
 const styles = StyleSheet.create({
   root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
   header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48, flexShrink: 0 },
+  headerCaseWrap: { flex: 1, alignItems: 'stretch', justifyContent: 'center', minWidth: 0 },
+  caseChipHeader: { width: '100%', minHeight: 36, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
   brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
   avatar: { width: 42, height: 42, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   serverButton: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 11, borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel }, serverButtonText: { color: colors.text, fontSize: 13, fontWeight: '800' }, serverChevron: { color: colors.muted, fontSize: 14, lineHeight: 16 }, serverDot: { width: 8, height: 8, borderRadius: 5 },
@@ -359,7 +413,10 @@ const styles = StyleSheet.create({
   caseChip: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border },
   case: { color: colors.text, fontSize: 14, fontWeight: '700' },
   notice: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 10 }, noticeText: { color: colors.text, fontSize: 14 },
-  route: { flex: 1, minHeight: 0, paddingBottom: 92 },
+  route: { flex: 1, minHeight: 0, paddingBottom: 92, position: 'relative' },
+  routeContent: { flex: 1, paddingTop: 18 },
+  routeFadeTop: { position: 'absolute', top: 17, left: 0, right: 0, height: 33, zIndex: 2 },
+  routeFadeBottom: { position: 'absolute', bottom: 91, left: 0, right: 0, height: 36, zIndex: 2 },
   avatarOpen: { borderWidth: 2, borderColor: colors.text },
   menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 20 },
   menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
