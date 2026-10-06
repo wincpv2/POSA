@@ -10,6 +10,7 @@ import { colors, navItems } from './posa-theme';
 import { useAuth } from '@/lib/auth-context';
 import { PosaMark } from './posa-logo';
 import { getInferenceHealth, type InferenceHealth } from '@/lib/inference';
+import WatercolorBackground from './watercolor-background';
 
 function initialsOf(name: string) {
   const parts = name.split(/[\s@.]+/).filter(Boolean);
@@ -115,6 +116,8 @@ function Workspace() {
 
   return <View style={styles.root}>
     <LinearGradient pointerEvents="none" colors={[colors.background, colors.gradientEnd]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
+    <WatercolorBackground />
+    <View style={styles.foreground}>
     <StatusBar style="light" />
     <View style={styles.header}>
       <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
@@ -162,6 +165,7 @@ function Workspace() {
     </View>
     {menuOpen ? <AccountMenu name={displayName} email={email} desktopWeb={desktopWeb} fullscreen={fullscreen} fullscreenError={fullscreenError} onToggleFullscreen={() => { void toggleFullscreen(); }} onClose={() => setMenuOpen(false)} onSignOut={() => { setMenuOpen(false); void signOut(); }} onOpenLog={() => { setMenuOpen(false); router.push('/activity' as never); }} /> : null}
     {serverMenuOpen ? <ServerStatusMenu health={serverHealth} error={serverError} connection={serverConnection} loading={serverLoading} onClose={() => setServerMenuOpen(false)} onRefresh={() => setServerRefreshKey((value) => value + 1)} /> : null}
+    </View>
   </View>;
 }
 
@@ -223,7 +227,8 @@ function AccountMenu({ name, email, desktopWeb, fullscreen, fullscreenError, onT
 export default function PosaShell() { return <UploadProvider><Workspace /></UploadProvider>; }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
+  root: { flex: 1, minHeight: '100%', position: 'relative', backgroundColor: colors.background },
+  foreground: { flex: 1, position: 'relative', zIndex: 1 },
   header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
@@ -237,15 +242,15 @@ const styles = StyleSheet.create({
   route: { flex: 1, minHeight: 0, paddingBottom: 92 },
   avatarOpen: { borderWidth: 2, borderColor: colors.text },
   menuBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 20 },
-  menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
-  serverMenu: { position: 'absolute', top: 62, right: 12, zIndex: 21, width: '92%', maxWidth: 340, minWidth: 250, padding: 12, borderRadius: 20, backgroundColor: 'rgba(2,3,58,0.94)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' },
+  menu: { position: 'absolute', top: 62, right: 16, zIndex: 21, minWidth: 220, maxWidth: 300, padding: 8, borderRadius: 20, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, boxShadow: '0 10px 30px rgba(0,0,0,0.18)' },
+  serverMenu: { position: 'absolute', top: 62, right: 12, zIndex: 21, width: '92%', maxWidth: 340, minWidth: 250, padding: 12, borderRadius: 20, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, boxShadow: '0 10px 30px rgba(0,0,0,0.18)' },
   serverMenuHeader: { paddingHorizontal: 8, paddingVertical: 8, gap: 3 }, overallStatus: { fontSize: 13, fontWeight: '800' }, statusRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8, paddingVertical: 6 }, statusCopy: { flex: 1, gap: 2 }, statusLabel: { color: colors.text, fontSize: 13, fontWeight: '800' }, statusDetail: { color: colors.muted, fontSize: 12, flexWrap: 'wrap' }, serverError: { color: colors.coral, fontSize: 12, lineHeight: 17, paddingHorizontal: 8, paddingTop: 6 }, checkedAt: { color: colors.muted, fontSize: 11, paddingHorizontal: 8, paddingTop: 6 }, refreshButton: { minHeight: 40, alignItems: 'center', justifyContent: 'center', marginTop: 8, borderRadius: 12, backgroundColor: colors.cyanSoft }, refreshDisabled: { opacity: 0.55 },
   menuIdentity: { paddingHorizontal: 12, paddingVertical: 10, gap: 2 }, menuName: { color: colors.text, fontSize: 15, fontWeight: '800' }, menuEmail: { color: colors.muted, fontSize: 13 },
   menuDivider: { height: 1, marginHorizontal: 8, backgroundColor: colors.border },
   fullscreenError: { color: colors.coral, fontSize: 12, paddingHorizontal: 12, paddingVertical: 6 },
   menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' }, menuLog: { color: colors.text, fontSize: 14, fontWeight: '700' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
-  dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: 'rgba(2,3,58,0.75)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', boxShadow: '0 10px 30px rgba(0,0,0,0.25)' },
+  dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, boxShadow: '0 10px 30px rgba(0,0,0,0.16)' },
   navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
 });

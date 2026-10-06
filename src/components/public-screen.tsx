@@ -5,6 +5,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { PosaText as Text } from './posa-ui';
 import { colors } from './posa-theme';
 import { PosaMark } from './posa-logo';
+import WatercolorBackground from './watercolor-background';
 
 // Verbatim disclaimers from the backend/auth course guide (see posa.md
 // "Security & medical-app compliance").
@@ -17,7 +18,8 @@ export function PublicScreen({ children, onBack }: { children: ReactNode; onBack
   return (
     <View style={styles.root}>
       <LinearGradient pointerEvents="none" colors={[colors.background, colors.gradientEnd]} start={{ x: 0.5, y: 0 }} end={{ x: 0.5, y: 1 }} style={StyleSheet.absoluteFill} />
-      <ScrollView contentContainerStyle={styles.page}>
+      <WatercolorBackground />
+      <ScrollView style={styles.foreground} contentContainerStyle={styles.page}>
         <View style={styles.header}>
           {onBack ? (
             <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={onBack} style={styles.back}>
@@ -34,7 +36,8 @@ export function PublicScreen({ children, onBack }: { children: ReactNode; onBack
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, minHeight: '100%', backgroundColor: colors.background },
+  root: { flex: 1, minHeight: '100%', position: 'relative', backgroundColor: colors.background },
+  foreground: { flex: 1, position: 'relative', zIndex: 1 },
   page: { flexGrow: 1, width: '100%', maxWidth: 640, alignSelf: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40 },
   header: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   back: { minWidth: 72, minHeight: 44, justifyContent: 'center' },

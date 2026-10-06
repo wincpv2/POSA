@@ -6,6 +6,7 @@ import { getQueryParams } from 'expo-auth-session/build/QueryParams';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import WatercolorBackground from '@/components/watercolor-background';
 
 export default function AuthCallbackScreen() {
   const router = useRouter();
@@ -52,9 +53,12 @@ export default function AuthCallbackScreen() {
   }, [returnHome, session]);
 
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: colors.background, padding: 24 }}>
+    <View style={{ flex: 1, position: 'relative', backgroundColor: colors.background }}>
+      <WatercolorBackground />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, position: 'relative', zIndex: 1 }}>
       {error ? <Text style={{ color: colors.text, textAlign: 'center' }}>{error}</Text> : <><ActivityIndicator color={colors.accent} /><Text style={{ color: colors.text }}>Completing sign-in…</Text></>}
       {error ? <Pressable accessibilityRole="button" onPress={() => router.replace('/')} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 16 }}><Text style={{ color: colors.text, fontWeight: '700' }}>Return to sign in</Text></Pressable> : null}
+      </View>
     </View>
   );
 }
