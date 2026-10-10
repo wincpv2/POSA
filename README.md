@@ -76,8 +76,6 @@ cp .env.example .env
 ```
 EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon/publishable key>
-# ไม่บังคับ: แสดงเฉพาะบัญชีขององค์กรนี้ในหน้าเลือกบัญชี Google
-EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN=
 ```
 
 > **ห้ามใช้ `service_role` key ในแอปเด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ RLS
@@ -142,10 +140,7 @@ npx supabase gen types typescript --linked > src/lib/database.types.ts
 | `get_shared_study` | ข้อมูลผลตรวจรายครั้งสำหรับผู้ป่วยที่ไม่ได้ login |
 | `get_deletion_log` | อ่าน log การลบและกู้คืน เฉพาะผู้ป่วยที่หมอคนนั้นผูกอยู่ |
 | `get_patient_dashboard` | ข้อมูล Dashboard ผู้ป่วย (คืนเป็น JSON เพื่อเพิ่มพารามิเตอร์ได้ภายหลัง) |
-| `hook_restrict_signup_domain` | Auth hook จำกัดการสมัครเฉพาะ `@email.kmutnb.ac.th` **(สร้างไว้แล้วแต่ยังปิดอยู่)** |
-
-**เปิดใช้การจำกัดโดเมน:** Dashboard → Authentication → Hooks → Before User Created → เลือก
-`hook_restrict_signup_domain` และใส่ `EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN=email.kmutnb.ac.th` ใน `.env`
+| `hook_restrict_signup_domain` | Auth hook เดิมที่คงไว้เพื่อความเข้ากันได้ แต่ตอนนี้อนุญาตบัญชีทุกอีเมล |
 
 ## โครงสร้างไฟล์หลัก
 

@@ -2,7 +2,7 @@
   "expo": {
     "name": "POSA",
     "slug": "posa-app",
-    "version": "1.0.4",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "posaapp",
@@ -12,7 +12,7 @@
     },
     "android": {
       "package": "com.posa.sleepapp",
-      "versionCode": 5,
+      "versionCode": 9,
       "adaptiveIcon": {
         "backgroundColor": "#1BA3CC",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -58,6 +58,12 @@
         "projectId": "4c14e529-6785-41ba-84b9-8ca61e10507e"
       }
     },
-    "owner": "wincpv2"
+    "owner": "wincpv2",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/4c14e529-6785-41ba-84b9-8ca61e10507e"
+    }
   }
 }

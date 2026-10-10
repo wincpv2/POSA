@@ -71,7 +71,7 @@ export default function HomeScreen() {
         setLoading(false);
       }
       try {
-        const rows = await listRecentEcgUploads(50);
+        const rows = await listRecentEcgUploads(1000);
         if (cancelled) return;
         setRecords(rows.map(toRecord));
         setLoadError('');
@@ -134,7 +134,7 @@ export default function HomeScreen() {
       studyId: record.id, fileName: upload.originalFilename, format: 'wfdb', sampleRate: upload.samplingRateHz, lead: upload.leadConfiguration ?? '',
       age: upload.ageYears != null ? String(upload.ageYears) : '', sex: sexLabel(upload.sex), bmi: upload.bmi != null ? String(upload.bmi) : '',
       metadata: 'Private WFDB recording', status, progress: run?.progress_percent ?? 0,
-      reportStatus: 'Draft', uploadId: upload.id, patientId: upload.patientId,
+      reportStatus: 'Draft', uploadId: upload.id, patientId: upload.patientId, clinicianId: upload.clinicianId,
       durationSeconds: upload.durationSeconds ?? (run?.total_minutes ?? 0) * 60, runId: run?.id ?? null, errorMessage: run?.error_message ?? '',
     });
     router.push(status === 'ready' ? '/detail' : '/processing');
@@ -197,6 +197,11 @@ export default function HomeScreen() {
 
 type RowActions = { canDelete: boolean; confirming: boolean; busy: boolean; onAskDelete: () => void; onCancelDelete: () => void; onDelete: () => void };
 function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAskDelete, onCancelDelete, onDelete }: { record: StudyRecord; compact: boolean; onPress: () => void } & RowActions) {
+  const { session } = useAuth();
+  const isOwner = record.upload?.clinicianId === session?.user.id;
+  const ownerName = isOwner
+    ? session?.user.user_metadata?.full_name || session?.user.user_metadata?.name || 'Clinician'
+    : record.upload?.ownerDisplayName || 'Clinician';
   if (confirming) {
     return <View accessibilityRole="alert" style={[styles.studyRow, styles.confirmRow, compact && styles.studyRowCompact]}>
       <View style={styles.identity}><Text style={styles.studyId}>Delete {record.id}?</Text><Text style={styles.subCopy}>It will disappear from your list. You can undo right after.</Text></View>
@@ -207,8 +212,9 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
     </View>;
   }
   return <View style={styles.rowWrap}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${ownerName}, ${isOwner ? 'your patient' : 'shared patient'}, ${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
       <View style={[styles.studyRow, compact && styles.studyRowCompact]}>
+        <View style={styles.ownerNameRow}><View style={[styles.ownerNameBadge, isOwner && styles.ownerNameBadgeMine]}><Text style={[styles.ownerNameText, isOwner && styles.ownerNameTextMine]}>{ownerName}</Text></View></View>
         <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
         <View style={[styles.statusBadge, styles.pendingBadge]}><Text style={styles.statusBadgeText}>{record.status}</Text></View>
         <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: `${record.upload.latestRun?.progress_percent ?? (record.status === 'Analysis complete' ? 100 : 0)}%` }]} /></View></View>
@@ -244,7 +250,7 @@ const styles = StyleSheet.create({
   columns: { gap: 14 }, columnsWide: { flexDirection: 'row', alignItems: 'flex-start' }, mainColumn: { flex: 1, minWidth: 0, gap: 14 }, sideColumn: { gap: 14 }, sideColumnWide: { width: 320 },
   continueCard: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderColor: 'rgba(144,224,239,0.7)' }, continueCopy: { flex: 1, minWidth: 220, gap: 3 }, sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800' }, progressTrack: { width: '100%', maxWidth: 420, height: 10, overflow: 'hidden', borderRadius: 99, backgroundColor: 'rgba(202,240,248,0.24)', marginTop: 5 }, progressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.accent }, continueButton: { minHeight: 48, paddingHorizontal: 20 }, continueButtonText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   studiesPanel: { gap: 14 }, studiesHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, filter: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 999, backgroundColor: 'rgba(202,240,248,0.13)' }, filterActive: { backgroundColor: colors.accent }, filterText: { color: colors.text, fontSize: 14, fontWeight: '700' }, filterTextActive: { color: colors.accentText }, recordList: { gap: 8 }, rowPress: { borderRadius: 18 }, pressed: { opacity: 0.84 },
-  studyRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.42)' }, studyRowCompact: { alignItems: 'flex-start', flexDirection: 'column', gap: 9 }, identity: { flex: 1, minWidth: 120 }, studyId: { color: colors.text, fontSize: 16, fontWeight: '800' }, subCopy: { color: colors.muted, fontSize: 14 }, statusBadge: { minHeight: 30, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: 'transparent' }, statusBadgeText: { color: colors.text, fontSize: 14, fontWeight: '800' }, pendingBadge: { borderStyle: 'dashed', borderColor: colors.text, backgroundColor: 'transparent' },
+  studyRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.42)' }, studyRowCompact: { alignItems: 'flex-start', flexDirection: 'column', gap: 9 }, ownerNameRow: { width: '100%', alignItems: 'center', marginBottom: -4 }, ownerNameBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 }, ownerNameBadgeMine: { backgroundColor: colors.cyanSoft, borderWidth: 1, borderColor: colors.accent }, ownerNameText: { color: colors.muted, fontSize: 13, fontWeight: '700' }, ownerNameTextMine: { color: colors.accent, fontWeight: '800' }, identity: { flex: 1, minWidth: 120 }, studyId: { color: colors.text, fontSize: 16, fontWeight: '800' }, subCopy: { color: colors.muted, fontSize: 14 }, statusBadge: { minHeight: 30, justifyContent: 'center', paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: 'transparent' }, statusBadgeText: { color: colors.text, fontSize: 14, fontWeight: '800' }, pendingBadge: { borderStyle: 'dashed', borderColor: colors.text, backgroundColor: 'transparent' },
   statusBlock: { width: 140, gap: 4 }, rowStatus: { color: colors.text, fontSize: 14 }, rowProgress: { height: 7, overflow: 'hidden', borderRadius: 99, backgroundColor: 'rgba(202,240,248,0.24)' }, rowProgressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.accent }, reviewBlock: { minWidth: 116, gap: 2 }, reviewText: { color: colors.text, fontSize: 14 }, empty: { color: colors.text, fontSize: 14, padding: 10 },
   sidePanel: { gap: 12 }, kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, kpi: { width: '48%', minHeight: 86, justifyContent: 'center', padding: 12, borderRadius: 18, backgroundColor: 'rgba(2,3,58,0.44)' }, kpiValue: { color: colors.text, fontSize: 28, lineHeight: 32, fontWeight: '800' }, kpiLabel: { color: colors.muted, fontSize: 14, lineHeight: 19 },
   mixBar: { height: 18, flexDirection: 'row', overflow: 'hidden', borderRadius: 99 }, mixSevere: { backgroundColor: colors.coral }, mixModerate: { backgroundColor: '#FFD166' }, mixMild: { backgroundColor: colors.accent }, mixPending: { backgroundColor: 'transparent', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.text }, legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, legendItem: { minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 6 }, legendDot: { width: 12, height: 12, borderRadius: 3, borderWidth: 1 }, dashed: { borderStyle: 'dashed' }, legendText: { color: colors.text, fontSize: 14 },

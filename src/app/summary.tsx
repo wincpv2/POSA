@@ -24,6 +24,7 @@ export default function SummaryScreen() {
   const { session } = useAuth();
   const generatedBy: string = session?.user?.user_metadata?.full_name ?? session?.user?.email ?? 'Clinician';
   const uploadId = study.uploadId;
+  const canManageStudy = Boolean(uploadId && study.clinicianId === session?.user.id);
   const [report, setReport] = useState<StudyReport>(EMPTY_REPORT);
   const [run, setRun] = useState<PredictionRun | null>(null);
   const [minutes, setMinutes] = useState<PredictionMinute[]>([]);
@@ -91,7 +92,7 @@ export default function SummaryScreen() {
       } catch { /* retain the last saved progress while offline */ }
       finally { refreshing = false; }
     };
-    if (run.summary_status === 'not_started') void startRecordSummary(uploadId).catch((reason) => {
+    if (canManageStudy && run.summary_status === 'not_started') void startRecordSummary(uploadId).catch((reason) => {
       if (!cancelled) setSummaryFetch({ key: summaryKey, error: messageOf(reason, 'Could not start the full-night summary.') });
     });
     if (run.summary_status === 'completed') {
@@ -111,10 +112,10 @@ export default function SummaryScreen() {
       return () => { cancelled = true; clearInterval(timer); };
     }
     return () => { cancelled = true; };
-  }, [uploadId, run?.id, run?.status, run?.summary_status, summaryKey, session?.user.id]);
+  }, [uploadId, run?.id, run?.status, run?.summary_status, summaryKey, session?.user.id, canManageStudy]);
 
   const retrySummary = async () => {
-    if (!uploadId) return;
+    if (!uploadId || !canManageStudy) return;
     try {
       await startRecordSummary(uploadId, true);
       const latest = await getLatestPredictionRun(uploadId);
@@ -136,7 +137,7 @@ export default function SummaryScreen() {
   const status: ReportStatus = uploadId ? report.status : study.reportStatus;
   const stageIndex = stages.indexOf(status);
   const locked = status === 'Approved';
-  const editable = Boolean(uploadId) && !locked && !busy;
+  const editable = canManageStudy && !locked && !busy;
   const completed = run?.status === 'completed';
   const estimates = currentRecordSummary?.modelMetrics;
   const proxyAhi = run?.status === 'completed' && run.total_minutes != null && run.total_minutes > 0 && run.apnea_minutes != null
@@ -164,7 +165,7 @@ export default function SummaryScreen() {
   };
   const exportOrPrint = () => exportPdf({ ...report, clinicianOpinion: opinion, patientExplanation: explanation });
   const save = async () => {
-    if (!uploadId) return;
+    if (!uploadId || !canManageStudy) return;
     setBusy(true);
     try { apply(await saveStudyReportText(uploadId, { clinicianOpinion: opinion, patientExplanation: explanation })); setMessage('Report saved.'); }
     catch (reason) { setMessage(messageOf(reason, 'Could not save the report.')); }
@@ -172,6 +173,7 @@ export default function SummaryScreen() {
   };
   const moveTo = async (next: ReportStatus) => {
     if (!uploadId) { update({ reportStatus: next }); return null; }
+    if (!canManageStudy) return null;
     setBusy(true);
     try {
       if (!locked) await saveStudyReportText(uploadId, { clinicianOpinion: opinion, patientExplanation: explanation });
@@ -181,7 +183,7 @@ export default function SummaryScreen() {
   };
   // Keeps the signed PDF in Supabase (bucket report-pdfs), one per approval.
   const archive = async (signed: StudyReport) => {
-    if (!uploadId) return;
+    if (!uploadId || !canManageStudy) return;
     setArchiving(true);
     try {
       const currentEvents = await listSymptomEvents(uploadId);
@@ -213,13 +215,14 @@ export default function SummaryScreen() {
     if (await moveTo(back) || !uploadId) setMessage(back === 'Reviewed' ? 'Approval undone. The report is back to Reviewed and can be edited.' : 'Review undone. The report is back to Draft.');
   };
   const openPdf = async (pdf: SavedReportPdf) => { try { await Linking.openURL(await reportPdfUrl(pdf.storagePath)); } catch (reason) { setMessage(messageOf(reason, 'Could not open the PDF.')); } };
-  const needsArchive = Boolean(uploadId) && locked && !sameInstant(pdfs[0]?.approvedAt ?? null, report.approvedAt);
+  const needsArchive = canManageStudy && locked && !sameInstant(pdfs[0]?.approvedAt ?? null, report.approvedAt);
 
   if (study.status !== 'ready') return <View style={styles.gate}><Text style={styles.title}>No completed study summary</Text><Text style={styles.copy}>Upload a record and complete its analysis first.</Text><AppButton href="/upload"><Text style={styles.buttonText}>Go to upload</Text></AppButton></View>;
   return <ScrollView contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY SUMMARY" title="Clinical summary" description={`${study.studyId || 'Study'} · report ${status.toLowerCase()}`} />
+    {uploadId && !canManageStudy ? <Text style={styles.note}>READ ONLY · This study belongs to another clinician. You can review and export it.</Text> : null}
     <View style={styles.viewTabs}>{(['Night Summary', 'Clinical report'] as const).map((value) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: view === value }} onPress={() => setView(value)} style={[styles.viewTab, view === value && styles.viewTabActive]}><Text selectable={false} style={[styles.tabText, view === value && styles.tabTextActive]}>{value}</Text></Pressable>)}</View>
-    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={() => { void retrySummary(); }} /> : <>
+    {view === 'Night Summary' ? <NightSummaryPanel summary={currentRecordSummary} loading={summaryLoading} error={summaryError} run={run} minutes={minutes} durationFallbackSeconds={study.durationSeconds} onRetry={canManageStudy ? () => { void retrySummary(); } : undefined} /> : <>
 
     <GlassPanel style={styles.panel}>
       <Text style={styles.title}>Model results</Text>
@@ -286,15 +289,15 @@ export default function SummaryScreen() {
         {needsArchive ? <AppButton variant="quiet" onPress={() => { void archive(report); }} disabled={archiving}><Text style={styles.link}>{archiving ? 'Saving PDF…' : 'Save PDF to Supabase'}</Text></AppButton> : null}
       </View> : null}
       <View style={styles.row}>
-        <AppButton onPress={() => { void primary(); }} disabled={busy || exporting || archiving}><Text style={styles.buttonText}>{exporting ? 'Creating PDF…' : archiving ? 'Saving PDF…' : busy ? 'Saving…' : status === 'Draft' ? 'Mark report reviewed' : status === 'Reviewed' ? 'Approve & sign' : 'Export PDF / Print'}</Text></AppButton>
-        {uploadId && dirty && !locked ? <AppButton variant="quiet" onPress={() => { void save(); }} disabled={busy}><Text style={styles.link}>Save draft</Text></AppButton> : null}
-        {status !== 'Draft' ? <AppButton variant="quiet" onPress={() => { void stepBack(); }} disabled={busy}><Text style={styles.link}>↩ Back to {status === 'Approved' ? 'Reviewed' : 'Draft'}</Text></AppButton> : null}
-        {!locked ? <AppButton variant="quiet" onPress={() => { void exportOrPrint(); }} disabled={exporting}><Text style={styles.link}>Export PDF / Print</Text></AppButton> : null}
+        <AppButton onPress={() => { if (canManageStudy) void primary(); else void exportOrPrint(); }} disabled={busy || exporting || archiving}><Text style={styles.buttonText}>{!canManageStudy ? 'Export PDF / Print' : exporting ? 'Creating PDF…' : archiving ? 'Saving PDF…' : busy ? 'Saving…' : status === 'Draft' ? 'Mark report reviewed' : status === 'Reviewed' ? 'Approve & sign' : 'Export PDF / Print'}</Text></AppButton>
+        {canManageStudy && uploadId && dirty && !locked ? <AppButton variant="quiet" onPress={() => { void save(); }} disabled={busy}><Text style={styles.link}>Save draft</Text></AppButton> : null}
+        {canManageStudy && status !== 'Draft' ? <AppButton variant="quiet" onPress={() => { void stepBack(); }} disabled={busy}><Text style={styles.link}>↩ Back to {status === 'Approved' ? 'Reviewed' : 'Draft'}</Text></AppButton> : null}
+        {canManageStudy && !locked ? <AppButton variant="quiet" onPress={() => { void exportOrPrint(); }} disabled={exporting}><Text style={styles.link}>Export PDF / Print</Text></AppButton> : null}
       </View>
       {message ? <Text accessibilityRole="alert" style={styles.copy}>{message}</Text> : null}
     </GlassPanel>
 
-    {study.patientId ? <ShareWithPatient patientId={study.patientId} /> : null}
+    {canManageStudy && study.patientId ? <ShareWithPatient patientId={study.patientId} /> : null}
     </>}
   </ScrollView>;
 }

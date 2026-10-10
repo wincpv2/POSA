@@ -144,31 +144,55 @@ export function reportHtml({ study, generatedBy, prediction, report, symptomEven
 }
 
 function printHtmlOnWeb(html: string) {
+  const overlay = document.createElement('div');
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'POSA report print preview');
+  Object.assign(overlay.style, { position: 'fixed', inset: '0', zIndex: '2147483647', display: 'flex', flexDirection: 'column', background: '#04065E' });
+
+  const toolbar = document.createElement('div');
+  Object.assign(toolbar.style, { minHeight: '56px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', padding: '8px 16px', background: '#02033A' });
+  const makeButton = (label: string) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    Object.assign(button.style, { minHeight: '38px', padding: '0 16px', border: '1px solid rgba(202,240,248,.25)', borderRadius: '20px', background: '#90E0EF', color: '#02033A', font: '600 14px Nunito, Arial, sans-serif', cursor: 'pointer' });
+    return button;
+  };
+  const title = document.createElement('span');
+  title.textContent = 'POSA · Report preview';
+  Object.assign(title.style, { flex: '1', color: '#CAF0F8', font: '700 15px Nunito, Arial, sans-serif' });
   const frame = document.createElement('iframe');
-  frame.setAttribute('aria-hidden', 'true');
-  Object.assign(frame.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
-  document.body.appendChild(frame);
-  const doc = frame.contentWindow?.document;
-  if (!doc || !frame.contentWindow) { frame.remove(); throw new Error('Printing is not available in this browser.'); }
-  doc.open(); doc.write(html); doc.close();
-  const win = frame.contentWindow;
-  const cleanup = () => setTimeout(() => frame.remove(), 1000);
-  win.addEventListener('afterprint', cleanup, { once: true });
-  setTimeout(() => { win.focus(); win.print(); }, 250);
+  frame.title = 'POSA report print preview';
+  Object.assign(frame.style, { flex: '1', width: '100%', border: '0', background: '#FFFFFF' });
+  frame.srcdoc = html;
+  const closeButton = makeButton('Close preview');
+  const printButton = makeButton('Print / Save PDF');
+  const close = () => {
+    document.removeEventListener('keydown', onKeyDown);
+    overlay.remove();
+  };
+  const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+  closeButton.addEventListener('click', close);
+  printButton.addEventListener('click', () => { frame.contentWindow?.focus(); frame.contentWindow?.print(); });
+  toolbar.append(title, closeButton, printButton);
+  overlay.append(toolbar, frame);
+  document.addEventListener('keydown', onKeyDown);
+  document.body.append(overlay);
 }
 
 export async function exportReportPdf(options: ReportOptions): Promise<string> {
   const html = reportHtml(options);
   if (Platform.OS === 'web') {
     const desktopPrint = (window as Window & {
-      posaDesktop?: { printHtml: (content: string) => Promise<boolean> };
-    }).posaDesktop?.printHtml;
+      posaDesktop?: { previewReport: (content: string) => Promise<boolean> };
+    }).posaDesktop?.previewReport;
     if (desktopPrint) {
-      const printed = await desktopPrint(html);
-      return printed ? 'Report sent to the print dialog.' : 'Print preview closed without printing.';
+      const opened = await desktopPrint(html);
+      return opened ? 'Report preview opened. Review it, then choose Print / Save PDF.' : 'Could not open the report preview.';
     }
     printHtmlOnWeb(html);
-    return 'Choose "Save as PDF" in the print dialog to download the report.';
+    return 'Report preview opened. Review it, then choose Print / Save PDF.';
   }
   const { uri } = await Print.printToFileAsync({ html });
   if (await Sharing.isAvailableAsync()) {

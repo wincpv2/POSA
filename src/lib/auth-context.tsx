@@ -9,11 +9,35 @@ import { cancelOfflineSignalDownloads } from './inference';
 import { clearUserOfflineCache } from './offline-cache';
 import { supabase } from './supabase';
 
-// Set EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN in .env to limit Google's account picker.
-const allowedDomain = process.env.EXPO_PUBLIC_ALLOWED_EMAIL_DOMAIN?.trim() || undefined;
-
 // Completes the in-app browser session when the OAuth redirect lands back in the app.
 WebBrowser.maybeCompleteAuthSession();
+
+let completingOAuthSession: Promise<void> | null = null;
+
+export async function completeOAuthTokens(access_token: string, refresh_token: string) {
+  if (completingOAuthSession) return completingOAuthSession;
+
+  const pending = (async () => {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    if (data.session?.access_token === access_token) return;
+    const { error: sessionError } = await supabase.auth.setSession({ access_token, refresh_token });
+    if (sessionError) throw sessionError;
+  })();
+  completingOAuthSession = pending;
+  try { await pending; }
+  finally { if (completingOAuthSession === pending) completingOAuthSession = null; }
+}
+
+export async function completeOAuthRedirect(url: string) {
+  const { params, errorCode } = getQueryParams(url);
+  if (errorCode || params.error_description || params.error) {
+    throw new Error(params.error_description ?? params.error ?? errorCode ?? 'Sign-in failed');
+  }
+  const { access_token, refresh_token } = params;
+  if (!access_token || !refresh_token) throw new Error('Sign-in returned no session tokens');
+  await completeOAuthTokens(access_token, refresh_token);
+}
 
 type AuthContextValue = {
   session: Session | null;
@@ -76,10 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // On web, use a same-window redirect: opening an OAuth popup after this
         // async request loses the original click gesture and browsers block it.
         skipBrowserRedirect: Platform.OS !== 'web',
-        // Optional: only show one organisation's accounts in Google's picker
-        // (e.g. email.kmutnb.ac.th). A hint, not a lock — the real check is the
-        // hook_restrict_signup_domain auth hook on the server.
-        ...(allowedDomain ? { queryParams: { hd: allowedDomain } } : {}),
+        queryParams: { prompt: 'select_account' },
       },
     });
     if (error) throw error;
@@ -93,15 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Supabase returns the tokens in the URL hash (#access_token=...), which
     // Linking.parse ignores; getQueryParams reads both ?query and #hash.
-    const { params, errorCode } = getQueryParams(result.url);
-    if (errorCode || params.error_description || params.error) {
-      throw new Error(params.error_description ?? params.error ?? errorCode ?? 'Sign-in failed');
-    }
-    const { access_token, refresh_token } = params;
-    if (!access_token || !refresh_token) throw new Error('Sign-in returned no session tokens');
-
-    const { error: sessionError } = await supabase.auth.setSession({ access_token, refresh_token });
-    if (sessionError) throw sessionError;
+    await completeOAuthRedirect(result.url);
   }
 
   async function signOut() {

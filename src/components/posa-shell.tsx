@@ -120,8 +120,8 @@ function Workspace() {
     <View style={styles.foreground}>
     <StatusBar style="light" />
     <View style={styles.header}>
-      <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA Sleep lab home" style={styles.brand}>
-        <PosaMark size={28} /><PosaText style={styles.brandName}>POSA</PosaText><PosaText style={styles.brandSub}>Sleep lab</PosaText>
+      <Link href="/" asChild><Pressable accessibilityRole="link" accessibilityLabel="POSA home" style={styles.brand}>
+        <PosaMark size={28} /><PosaText style={styles.brandName}>POSA</PosaText>
       </Pressable></Link>
       <View style={styles.headerActions}>
         <Pressable accessibilityRole="button" accessibilityLabel="Open server status" accessibilityState={{ expanded: serverMenuOpen }} onPress={() => { setMenuOpen(false); setServerMenuOpen((open) => !open); }} style={[styles.serverButton, serverMenuOpen && styles.avatarOpen]}>
@@ -232,7 +232,7 @@ const styles = StyleSheet.create({
   header: { minHeight: 68, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 48 },
-  brandName: { color: colors.text, fontSize: 20, fontWeight: '800' }, brandSub: { color: colors.text, fontSize: 14 },
+  brandName: { color: colors.text, fontSize: 20, fontWeight: '800' },
   avatar: { width: 42, height: 42, borderRadius: 22, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' }, avatarText: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   serverButton: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 11, borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel }, serverButtonText: { color: colors.text, fontSize: 13, fontWeight: '800' }, serverChevron: { color: colors.muted, fontSize: 14, lineHeight: 16 }, serverDot: { width: 8, height: 8, borderRadius: 5 },
   contentTop: { width: '100%', maxWidth: 1440, alignSelf: 'center', paddingHorizontal: 20, gap: 8 }, contentTopCompact: { paddingHorizontal: 12 },

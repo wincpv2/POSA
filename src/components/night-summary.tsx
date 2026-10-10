@@ -10,7 +10,7 @@ const durationLabel = (seconds: number) => `${Math.floor(seconds / 3600)} h ${St
 
 export function NightSummaryPanel({ summary, loading, error, run, minutes, durationFallbackSeconds, onRetry }: {
   summary: RecordSummary | null; loading: boolean; error: string; run: PredictionRun | null;
-  minutes: PredictionMinute[]; durationFallbackSeconds: number; onRetry: () => void;
+  minutes: PredictionMinute[]; durationFallbackSeconds: number; onRetry?: () => void;
 }) {
   const { width } = useWindowDimensions();
   const wide = width >= 900;
@@ -41,7 +41,7 @@ export function NightSummaryPanel({ summary, loading, error, run, minutes, durat
     <Text style={styles.note}>Probability-weighted burden = 100 × Σpᵢ / N, where N is the number of analyzed minute windows. This score is not calibration-adjusted. Positive minutes use pᵢ ≥ 0.50; adjacent positive minutes form a predicted run. These are model outputs, not clinical apnea events or AHI. HRV uses {summary?.qrsAnnotationsAvailable ? 'normal-beat QRS annotations.' : 'automatically detected R-peaks and is an estimate.'}</Text>
     {loading ? <Text style={styles.note}>Calculating full-record ECG summary…</Text> : null}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-    {!summary ? <AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.retry}>{loading ? 'Restart summary' : 'Retry summary'}</Text></AppButton> : null}
+    {!summary && onRetry ? <AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.retry}>{loading ? 'Restart summary' : 'Retry summary'}</Text></AppButton> : null}
     <View style={styles.charts}>
       <Chart title="Minute median heart rate · red marks show A-label runs or model predictions" xml={summary?.charts.screen.heartRateSvg} unavailableMessage={chartMessage} aspect={12 / 3.4} wide />
       <View style={[styles.secondaryCharts, wide && styles.secondaryChartsWide]}>

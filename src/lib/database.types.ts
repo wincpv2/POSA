@@ -302,6 +302,7 @@ export type Database = {
           created_at: string
           date_of_birth: string | null
           id: string
+          owner_clinician_id: string | null
           sex: string | null
         }
         Insert: {
@@ -309,6 +310,7 @@ export type Database = {
           created_at?: string
           date_of_birth?: string | null
           id?: string
+          owner_clinician_id?: string | null
           sex?: string | null
         }
         Update: {
@@ -316,6 +318,7 @@ export type Database = {
           created_at?: string
           date_of_birth?: string | null
           id?: string
+          owner_clinician_id?: string | null
           sex?: string | null
         }
         Relationships: []
@@ -618,6 +621,10 @@ export type Database = {
     }
     Functions: {
       account_display_name: { Args: { p_user: string }; Returns: string }
+      get_visible_study_owner_names: {
+        Args: { p_upload_ids: string[] }
+        Returns: { clinician_id: string; display_name: string }[]
+      }
       get_deletion_log: {
         Args: { p_limit?: number }
         Returns: {
@@ -645,9 +652,14 @@ export type Database = {
           patient_explanation: string
           record_code: string
           sampling_rate_hz: number
+          subject_code: string | null
           status: string
           total_minutes: number
         }[]
+      }
+      get_patient_report_pdf: {
+        Args: { p_kind: string; p_token: string }
+        Returns: { record_code: string | null; storage_path: string }[]
       }
       hook_restrict_signup_domain: { Args: { event: Json }; Returns: Json }
       restore_ecg_upload: { Args: { p_upload_id: string }; Returns: boolean }

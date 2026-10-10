@@ -11,6 +11,7 @@ export type RecentEcgUpload = {
   id: string;
   patientId: string;
   clinicianId: string; // who uploaded it: only they can delete it
+  ownerDisplayName: string | null;
   recordCode: string;
   subjectCode: string;
   status: string;
@@ -52,9 +53,7 @@ export type PredictionMinute = {
   is_apnea: boolean;
 };
 
-// ecg_uploads' own RLS already scopes this to studies the signed-in clinician
-// can see (their own uploads, plus any patient they're attached to via
-// clinician_patients) — no manual clinician_id filter needed here.
+// RLS exposes every active study to signed-in clinicians; mutations remain owner-only.
 export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[]> {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
@@ -79,6 +78,17 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
     .in('patient_id', patientIds);
   if (relationsError) throw relationsError;
 
+  // Profiles are private; this RPC returns names only for the visible studies
+  // already fetched above. Keep the study list usable if the optional label fails.
+  let ownerNames: { clinician_id: string; display_name: string }[] = [];
+  try {
+    const { data, error } = await supabase.rpc('get_visible_study_owner_names', {
+      p_upload_ids: uploads.map((row) => row.id),
+    });
+    if (!error) ownerNames = data ?? [];
+  } catch { /* The ownership label is optional; preserve the study list offline. */ }
+  const ownerNameByClinician = new Map<string, string>(ownerNames.map((row): [string, string] => [row.clinician_id, row.display_name]));
+
   const subjectCodeByPatient = new Map((relations ?? []).map((r) => [r.patient_id, r.subject_code]));
   const { data: runs, error: runsError } = await supabase
     .from('prediction_runs')
@@ -93,6 +103,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
     id: row.id,
     patientId: row.patient_id,
     clinicianId: row.clinician_id,
+    ownerDisplayName: ownerNameByClinician.get(row.clinician_id) ?? null,
     recordCode: row.record_code ?? row.id.slice(0, 8),
     subjectCode: subjectCodeByPatient.get(row.patient_id) ?? '—',
     status: row.status,
@@ -124,13 +135,11 @@ export async function listPredictionMinutes(runId: string): Promise<PredictionMi
   return data ?? [];
 }
 
-export const SYMPTOM_TAGS = ['Chest pain', 'Palpitations', 'Shortness of breath', 'Dizziness'] as const;
-export type SymptomTag = (typeof SYMPTOM_TAGS)[number];
 export type EcgSymptomEvent = {
   id: string;
   ecg_upload_id: string;
   occurred_at_seconds: number;
-  symptoms: SymptomTag[];
+  symptoms: string[];
   created_by: string;
   created_at: string;
 };
@@ -143,30 +152,6 @@ export async function listSymptomEvents(uploadId: string): Promise<EcgSymptomEve
     .order('occurred_at_seconds');
   if (error) throw error;
   return (data ?? []) as EcgSymptomEvent[];
-}
-
-export async function addSymptomEvent(uploadId: string, seconds: number, symptoms: SymptomTag[]): Promise<EcgSymptomEvent> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  if (userError) throw userError;
-  const clinicianId = userData.user?.id;
-  if (!clinicianId) throw new Error('Sign in again before recording symptoms.');
-  const uniqueSymptoms = [...new Set(symptoms)].filter((item): item is SymptomTag => SYMPTOM_TAGS.includes(item));
-  if (!Number.isFinite(seconds) || seconds < 0 || uniqueSymptoms.length === 0) throw new Error('Select at least one symptom at a valid recording time.');
-
-  const { data, error } = await supabase.from('ecg_symptom_events').insert({
-    ecg_upload_id: uploadId,
-    occurred_at_seconds: Number(seconds.toFixed(3)),
-    symptoms: uniqueSymptoms,
-    created_by: clinicianId,
-  }).select('id, ecg_upload_id, occurred_at_seconds, symptoms, created_by, created_at').single();
-  if (error) throw error;
-  return data as EcgSymptomEvent;
-}
-
-export async function deleteSymptomEvent(eventId: string): Promise<void> {
-  const { data, error } = await supabase.from('ecg_symptom_events').delete().eq('id', eventId).select('id').maybeSingle();
-  if (error) throw error;
-  if (!data) throw new Error('This symptom event could not be deleted.');
 }
 
 export type RosterPatient = {
@@ -226,7 +211,7 @@ export async function createPatientAndAttach(input: NewPatientInput): Promise<Ro
   const patientId = crypto.randomUUID();
   const { error: patientError } = await supabase
     .from('patients')
-    .insert({ id: patientId, sex: input.sex ?? null, date_of_birth: input.dateOfBirth ?? null, bmi: input.bmi ?? null });
+    .insert({ id: patientId, owner_clinician_id: clinicianId, sex: input.sex ?? null, date_of_birth: input.dateOfBirth ?? null, bmi: input.bmi ?? null });
   if (patientError) throw patientError;
 
   const { error: attachError } = await supabase.from('clinician_patients').insert({
@@ -267,7 +252,7 @@ export type EcgStudyInput = {
 // Uploads every file into the private ecg-files bucket under this clinician's
 // own folder (required by the bucket's INSERT policy — see
 // 20260929000003_ecg_storage_bucket.sql), then records one ecg_uploads row.
-export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string }> {
+export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string; clinicianId: string }> {
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
@@ -303,7 +288,7 @@ export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string
     .single();
   if (insertError) throw insertError;
 
-  return { id: data.id };
+  return { id: data.id, clinicianId };
 }
 
 export async function getEcgUploadOwner(uploadId: string): Promise<string> {
@@ -402,6 +387,7 @@ export async function createShareLink(ecgUploadId: string): Promise<ShareLink> {
 }
 
 export type SharedStudy = {
+  patientCode: string | null;
   recordCode: string | null;
   createdAt: string;
   status: string;
@@ -424,6 +410,7 @@ export async function getSharedStudy(token: string): Promise<SharedStudy | null>
   if (!row) return null;
   return {
     recordCode: row.record_code,
+    patientCode: row.subject_code,
     createdAt: row.created_at,
     status: row.status,
     samplingRateHz: row.sampling_rate_hz,
@@ -486,10 +473,11 @@ export type DashboardNight = {
   totalMinutes: number | null;
   apneaPercent: number | null;
 };
-export type PatientDashboard = { expiresAt: string; nights: DashboardNight[] };
+export type PatientDashboard = { subjectCode: string | null; expiresAt: string; nights: DashboardNight[] };
 
 type DashboardJson = {
   expires_at: string;
+  subject_code: string | null;
   studies: { record_code: string | null; created_at: string; status: string; sampling_rate_hz: number | null; lead_configuration: string | null; apnea_minutes: number | null; total_minutes: number | null; apnea_percent: number | null; patient_explanation: string | null; approved_at: string | null }[];
 };
 
@@ -501,6 +489,7 @@ export async function getPatientDashboard(token: string): Promise<PatientDashboa
   const json = data as unknown as DashboardJson;
   return {
     expiresAt: json.expires_at,
+    subjectCode: json.subject_code,
     nights: json.studies.map((s) => ({
       recordCode: s.record_code,
       createdAt: s.created_at,
@@ -514,6 +503,15 @@ export async function getPatientDashboard(token: string): Promise<PatientDashboa
       apneaPercent: s.apnea_percent,
     })),
   };
+}
+
+export async function getPatientReportPdf(token: string, kind: PatientLink['kind'], download: boolean): Promise<{ available: boolean; url: string | null }> {
+  const { data, error } = await supabase.functions.invoke('patient-report-download', {
+    body: { token, kind, download },
+  });
+  if (error) throw error;
+  if (!data || typeof data.available !== 'boolean') throw new Error('Report status is unavailable.');
+  return { available: data.available, url: typeof data.url === 'string' ? data.url : null };
 }
 
 // ---- Clinician-written report (opinion, patient explanation, sign-off) ----

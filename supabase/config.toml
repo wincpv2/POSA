@@ -1,0 +1,2 @@
+[functions.patient-report-download]
+verify_jwt = false

@@ -40,6 +40,7 @@ export default function ProcessingScreen() {
   const reviewCacheRun = useRef('');
   const diagnosticKeys = useRef(new Set<string>());
   const userId = session?.user.id;
+  const canManageStudy = Boolean(study.uploadId && study.clinicianId === userId);
 
   const logDiagnostic = useCallback((key: string, message: string) => {
     if (diagnosticKeys.current.has(key)) return;
@@ -106,13 +107,13 @@ export default function ProcessingScreen() {
           }
           if (userId && recentCacheRun.current !== run.id) {
             recentCacheRun.current = run.id;
-            void listRecentEcgUploads(50).then((uploads) => writeRecentUploadsCache(userId, uploads)).catch(() => {});
+            void listRecentEcgUploads(1000).then((uploads) => writeRecentUploadsCache(userId, uploads)).catch(() => {});
           }
           if (timelineRun.current !== run.id) {
             timelineRun.current = run.id;
             loadDetailData(study.uploadId!, run.id);
           }
-          if (run.summary_status === 'not_started' && summaryRun.current !== run.id) {
+          if (canManageStudy && run.summary_status === 'not_started' && summaryRun.current !== run.id) {
             summaryRun.current = run.id;
             void startRecordSummary(study.uploadId!).catch(() => { summaryRun.current = ''; });
           }
@@ -135,7 +136,7 @@ export default function ProcessingScreen() {
     void refresh();
     const timer = setInterval(() => { void refresh(); }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [study.uploadId, update, loadDetailData, userId, logDiagnostic]);
+  }, [study.uploadId, update, loadDetailData, userId, logDiagnostic, canManageStudy]);
 
   useEffect(() => {
     if (!study.uploadId) return;
@@ -176,7 +177,7 @@ export default function ProcessingScreen() {
   }, [study.uploadId, logDiagnostic]);
 
   const retry = async () => {
-    if (!study.uploadId) return;
+    if (!study.uploadId || !canManageStudy) return;
     setBusy(true);
     setError('');
     setMonitorError('');
@@ -195,7 +196,7 @@ export default function ProcessingScreen() {
   };
 
   const retrySummary = async () => {
-    if (!study.uploadId || !run) return;
+    if (!study.uploadId || !run || !canManageStudy) return;
     try { await startRecordSummary(study.uploadId, true); } catch (reason) {
       setMonitorError(reason instanceof Error ? reason.message : 'Could not restart the ECG summary.');
     }
@@ -211,6 +212,7 @@ export default function ProcessingScreen() {
     : 0;
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
     <PageIntro eyebrow="STUDY WORKFLOW" title={done ? 'Analysis complete' : processing ? 'Analyzing ECG recording' : 'Analysis needs attention'} description="The model classifies complete one-minute ECG windows. Progress and results come from the inference service." />
+    {study.uploadId && !canManageStudy ? <Text style={styles.copy}>READ ONLY · Shared study. You can review its processing status and results.</Text> : null}
     <GlassPanel style={styles.panel}>
       <Text style={styles.heading}>{study.studyId} · {study.fileName}</Text>
       <Text style={styles.copy}>{study.sampleRate} Hz · {study.lead || 'First ECG channel'} · {study.fileSize ? `${(study.fileSize / 1024 / 1024).toFixed(1)} MB` : ''}</Text>
@@ -219,8 +221,9 @@ export default function ProcessingScreen() {
       {done ? <View style={styles.secondaryWork}>
         <Text style={styles.heading}>Full-night ECG summary</Text>
         {run?.summary_status === 'completed' ? <Text style={styles.copy}>Ready · HR, HRV, and report charts are available.</Text>
-          : run?.summary_status === 'failed' ? <><Text accessibilityRole="alert" style={styles.error}>{run.summary_error_message || 'Full-night summary failed.'}</Text><AppButton compact variant="quiet" onPress={() => { void retrySummary(); }}><Text style={styles.link}>Retry summary</Text></AppButton></>
-            : <><Text style={styles.copy}>{run?.summary_stage || 'Starting full-night summary'} · {run?.summary_progress_percent ?? 0}%</Text><View accessibilityRole="progressbar" accessibilityLabel="Full-night ECG summary progress" style={styles.track}><View style={[styles.fillSecondary, { width: `${run?.summary_progress_percent ?? 0}%` }]} /></View></>}
+          : run?.summary_status === 'failed' ? <><Text accessibilityRole="alert" style={styles.error}>{run.summary_error_message || 'Full-night summary failed.'}</Text>{canManageStudy ? <AppButton compact variant="quiet" onPress={() => { void retrySummary(); }}><Text style={styles.link}>Retry summary</Text></AppButton> : <Text style={styles.copy}>Only the study owner can retry this summary.</Text>}</>
+            : canManageStudy ? <><Text style={styles.copy}>{run?.summary_stage || 'Starting full-night summary'} · {run?.summary_progress_percent ?? 0}%</Text><View accessibilityRole="progressbar" accessibilityLabel="Full-night ECG summary progress" style={styles.track}><View style={[styles.fillSecondary, { width: `${run?.summary_progress_percent ?? 0}%` }]} /></View></>
+              : <Text style={styles.copy}>Full-night summary has not been started by the study owner.</Text>}
         <Text style={styles.copy}>ECG signal: {prerequisiteLabel(signalState)} · Python timeline: {prerequisiteLabel(timelineState)}</Text>
         {(signalState === 'failed' || timelineState === 'failed') && run?.id ? <AppButton compact variant="quiet" onPress={() => loadDetailData(study.uploadId!, run.id)}><Text style={styles.link}>Retry signal and timeline</Text></AppButton> : null}
         {activeOfflineDownload ? <View style={styles.offlineBlock}>
@@ -251,7 +254,7 @@ export default function ProcessingScreen() {
     <View style={styles.actions}>
       {done ? <AppButton disabled={signalState === 'loading' || timelineState === 'loading' || signalState === 'waiting' || timelineState === 'waiting'} onPress={() => router.push('/detail')}><Text style={styles.primary}>Open ECG and predictions</Text></AppButton>
         : processing ? <AppButton variant="quiet" onPress={() => router.replace('/')}><Text style={styles.link}>Return home while analysis continues</Text></AppButton>
-          : <AppButton onPress={() => { void retry(); }} disabled={busy}><Text style={styles.primary}>{busy ? 'Retrying…' : 'Retry analysis'}</Text></AppButton>}
+          : canManageStudy ? <AppButton onPress={() => { void retry(); }} disabled={busy}><Text style={styles.primary}>{busy ? 'Retrying…' : 'Retry analysis'}</Text></AppButton> : <Text style={styles.copy}>Only the study owner can start or retry analysis.</Text>}
       <Pressable accessibilityRole="link" onPress={() => router.replace('/')} style={styles.touch}><Text style={styles.link}>Back to home</Text></Pressable>
     </View>
   </ScrollView>;

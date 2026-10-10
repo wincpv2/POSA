@@ -7,6 +7,7 @@ import { linkFromInput, type PatientLink } from '@/lib/queries';
 import { PublicScreen } from './public-screen';
 import { AppButton, FormLabel, GlassPanel, PosaText as Text } from './posa-ui';
 import { colors, fonts } from './posa-theme';
+import { PatientLanguageSwitch, usePatientLanguage, type PatientCopy } from './patient-language';
 
 type Mode = 'scan' | 'paste';
 
@@ -14,19 +15,20 @@ type Mode = 'scan' | 'paste';
 // QR code is the default; pasting the link is the fallback (no camera, web).
 export default function PatientAccess({ onBack, onToken }: { onBack: () => void; onToken: (link: PatientLink) => void }) {
   const [mode, setMode] = useState<Mode>('scan');
+  const { language, setLanguage, copy } = usePatientLanguage();
 
   return (
-    <PublicScreen onBack={onBack}>
+    <PublicScreen onBack={onBack} backLabel={'← ' + copy.back} headerAction={<PatientLanguageSwitch language={language} onChange={setLanguage} />}>
       <View style={styles.intro}>
-        <Text style={styles.eyebrow}>PATIENT</Text>
-        <Text style={styles.title}>Open your dashboard</Text>
-        <Text style={styles.copy}>Use the QR code or link your clinician gave you.</Text>
+        <Text style={styles.eyebrow}>{copy.patientAccess}</Text>
+        <Text style={styles.title}>{copy.openDashboard}</Text>
+        <Text style={styles.copy}>{copy.accessCopy}</Text>
       </View>
       <View accessibilityRole="tablist" style={styles.segment}>
-        <Segment label="Scan QR" active={mode === 'scan'} onPress={() => setMode('scan')} />
-        <Segment label="Paste link" active={mode === 'paste'} onPress={() => setMode('paste')} />
+        <Segment label={copy.scanQr} active={mode === 'scan'} onPress={() => setMode('scan')} />
+        <Segment label={copy.pasteLink} active={mode === 'paste'} onPress={() => setMode('paste')} />
       </View>
-      {mode === 'scan' ? <ScanPanel onToken={onToken} onUsePaste={() => setMode('paste')} /> : <PastePanel onToken={onToken} />}
+      {mode === 'scan' ? <ScanPanel copy={copy} onToken={onToken} onUsePaste={() => setMode('paste')} /> : <PastePanel copy={copy} onToken={onToken} />}
     </PublicScreen>
   );
 }
@@ -39,7 +41,7 @@ function Segment({ label, active, onPress }: { label: string; active: boolean; o
   );
 }
 
-function ScanPanel({ onToken, onUsePaste }: { onToken: (link: PatientLink) => void; onUsePaste: () => void }) {
+function ScanPanel({ copy, onToken, onUsePaste }: { copy: PatientCopy; onToken: (link: PatientLink) => void; onUsePaste: () => void }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [error, setError] = useState('');
   const handled = useRef(false);
@@ -47,7 +49,7 @@ function ScanPanel({ onToken, onUsePaste }: { onToken: (link: PatientLink) => vo
   const onScanned = ({ data }: BarcodeScanningResult) => {
     if (handled.current) return;
     const link = linkFromInput(data);
-    if (!link) { setError('This QR code is not a POSA link.'); return; }
+    if (!link) { setError(copy.invalidQr); return; }
     handled.current = true;
     onToken(link);
   };
@@ -57,11 +59,11 @@ function ScanPanel({ onToken, onUsePaste }: { onToken: (link: PatientLink) => vo
   if (!permission.granted) {
     return (
       <GlassPanel style={styles.panel}>
-        <Text style={styles.heading}>Camera access</Text>
-        <Text style={styles.copy}>POSA uses the camera only to read the QR code from your clinician.</Text>
-        {permission.canAskAgain ? <AppButton onPress={() => { void requestPermission(); }}><Text style={styles.primaryText}>Allow camera</Text></AppButton>
-          : <Text style={styles.copy}>Camera access is turned off. Allow it in your settings, or paste the link instead.</Text>}
-        <AppButton variant="quiet" onPress={onUsePaste}><Text style={styles.quietText}>Paste a link instead</Text></AppButton>
+        <Text style={styles.heading}>{copy.cameraAccess}</Text>
+        <Text style={styles.copy}>{copy.cameraReason}</Text>
+        {permission.canAskAgain ? <AppButton onPress={() => { void requestPermission(); }}><Text style={styles.primaryText}>{copy.allowCamera}</Text></AppButton>
+          : <Text style={styles.copy}>{copy.cameraOff}</Text>}
+        <AppButton variant="quiet" onPress={onUsePaste}><Text style={styles.quietText}>{copy.pasteInstead}</Text></AppButton>
       </GlassPanel>
     );
   }
@@ -74,31 +76,31 @@ function ScanPanel({ onToken, onUsePaste }: { onToken: (link: PatientLink) => vo
           facing="back"
           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
           onBarcodeScanned={onScanned}
-          onMountError={() => setError('The camera could not start on this device. Paste the link instead.')}
+          onMountError={() => setError(copy.cameraError)}
         />
       </View>
-      <Text style={styles.copy}>Point the camera at the QR code.</Text>
+      <Text style={styles.copy}>{copy.pointCamera}</Text>
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-      <AppButton variant="quiet" onPress={onUsePaste}><Text style={styles.quietText}>Paste a link instead</Text></AppButton>
+      <AppButton variant="quiet" onPress={onUsePaste}><Text style={styles.quietText}>{copy.pasteInstead}</Text></AppButton>
     </GlassPanel>
   );
 }
 
-function PastePanel({ onToken }: { onToken: (link: PatientLink) => void }) {
+function PastePanel({ copy, onToken }: { copy: PatientCopy; onToken: (link: PatientLink) => void }) {
   const [value, setValue] = useState('');
   const [error, setError] = useState('');
   const open = () => {
     const link = linkFromInput(value);
-    if (!link) { setError('This is not a POSA link. Check that you copied the whole link.'); return; }
+    if (!link) { setError(copy.invalidLink); return; }
     setError('');
     onToken(link);
   };
   return (
     <GlassPanel style={styles.panel}>
-      <FormLabel>Result link</FormLabel>
-      <TextInput value={value} onChangeText={setValue} onSubmitEditing={open} placeholder="Paste the link from your clinician" placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.input} accessibilityLabel="Result link" />
+      <FormLabel>{copy.resultLink}</FormLabel>
+      <TextInput value={value} onChangeText={setValue} onSubmitEditing={open} placeholder={copy.pastePlaceholder} placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} style={styles.input} accessibilityLabel={copy.resultLink} />
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-      <AppButton onPress={open} disabled={!value.trim()}><Text style={styles.primaryText}>Open</Text></AppButton>
+      <AppButton onPress={open} disabled={!value.trim()}><Text style={styles.primaryText}>{copy.open}</Text></AppButton>
     </GlassPanel>
   );
 }

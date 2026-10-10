@@ -4,7 +4,6 @@ import { Gesture, GestureDetector, type GestureStateChangeEvent, type PanGesture
 import Svg, { Circle, Line, Path, Rect, SvgXml, Text as SvgText } from 'react-native-svg';
 import { AppButton, PosaText as Text, pressX } from '@/components/posa-ui';
 import type { SignalMinute } from '@/lib/inference';
-import type { EcgSymptomEvent } from '@/lib/queries';
 
 const VIEW_WINDOWS = [2.5, 5, 10, 20, 40, 80];
 const plot = { left: 48, right: 990, top: 20, bottom: 290 };
@@ -32,7 +31,6 @@ type WaveformProps = {
   viewSeconds: number;
   playing: boolean;
   apneaIntervals: Interval[];
-  events: EcgSymptomEvent[];
   uploadId: string | undefined;
   selectedPeak: { minute: number; index: number } | null;
   onSelectedPeak: (peak: { minute: number; index: number } | null) => void;
@@ -46,7 +44,7 @@ export function EcgWaveform(props: WaveformProps) {
   const {
     signal, signalPending, signalError, onRetry, currentMinute, currentSecond,
     totalDuration, viewStartSec, viewSeconds, playing,
-    apneaIntervals, events, uploadId, selectedPeak, onSelectedPeak,
+    apneaIntervals, uploadId, selectedPeak, onSelectedPeak,
     onViewStart, onViewSeconds, onPlaying, onSeek,
   } = props;
   const [chartWidth, setChartWidth] = useState(0);
@@ -156,11 +154,6 @@ export function EcgWaveform(props: WaveformProps) {
     const cursor = currentSecond >= plotStart && currentSecond <= plotStart + plotSpan
       ? plot.left + (currentSecond - plotStart) / plotSpan * (plot.right - plot.left)
       : null;
-    const symptomMarkers = events
-      .filter((event) => event.ecg_upload_id === uploadId && finite(event.occurred_at_seconds) && Math.floor(event.occurred_at_seconds / 60) === currentMinute)
-      .map((event) => event.occurred_at_seconds % 60)
-      .filter((second) => second >= plotStart && second <= plotStart + plotSpan)
-      .map((second) => plot.left + (second - plotStart) / plotSpan * (plot.right - plot.left));
     return {
       path,
       xGrid,
@@ -169,7 +162,6 @@ export function EcgWaveform(props: WaveformProps) {
       peaks,
       apneaSpans,
       cursor,
-      symptomMarkers,
       plotStart,
       plotSpan,
       start: currentMinute * 60 + plotStart,
@@ -177,7 +169,7 @@ export function EcgWaveform(props: WaveformProps) {
       duration,
       rate,
     };
-  }, [signal, uploadId, currentMinute, currentSecond, viewSeconds, viewStartSec, playing, events, apneaIntervals, selectedPeak]);
+  }, [signal, uploadId, currentMinute, currentSecond, viewSeconds, viewStartSec, playing, apneaIntervals, selectedPeak]);
 
   const zoomAt = useCallback((direction: -1 | 1, anchorRatio: number) => {
     const index = VIEW_WINDOWS.indexOf(viewSecondsRef.current);
@@ -381,7 +373,6 @@ export function EcgWaveform(props: WaveformProps) {
       {plotted.apneaSpans.map((span, index) => <Rect key={`apnea-bg${index}`} x={span.x} y={plot.top} width={Math.max(1, span.width)} height={plot.bottom - plot.top} fill="#F16A78" opacity={0.16} />)}
       {Array.from({ length: 16 }, (_, index) => <Line key={`h${index}`} x1={plot.left} x2={plot.right} y1={plot.top + index * (plot.bottom - plot.top) / 15} y2={plot.top + index * (plot.bottom - plot.top) / 15} stroke={index % 5 === 0 ? '#3B5668' : '#263D4D'} strokeWidth={index % 5 === 0 ? 1.2 : 0.75} />)}
       {plotted.xGrid.map((line, index) => <Line key={`v${index}`} x1={line.x} x2={line.x} y1={plot.top} y2={plot.bottom} stroke={line.major ? '#3B5668' : '#263D4D'} strokeWidth={line.major ? 1.2 : 0.75} />)}
-      {plotted.symptomMarkers.map((x, index) => <Line key={`s${index}`} x1={x} x2={x} y1={plot.top} y2={plot.bottom} stroke="#FFC857" strokeDasharray="4 4" strokeWidth={1.5} />)}
       <Path d={plotted.path} fill="none" stroke="#53D5C5" strokeWidth={2.3} />
       {plotted.peaks.map((peak) => <Circle key={`r${peak.index}`} cx={peak.x} cy={peak.y} r={peak.selected ? 6 : peak.neighbor ? 4.5 : 3.5} fill={peak.neighbor ? '#102333' : '#FFC857'} stroke={peak.neighbor ? '#53D5C5' : '#102333'} strokeWidth={peak.selected || peak.neighbor ? 1.5 : 1} />)}
       {plotted.cursor == null ? null : <Line x1={plotted.cursor} x2={plotted.cursor} y1={plot.top} y2={plot.bottom} stroke="#E8F3F2" strokeWidth={1} opacity={0.85} />}

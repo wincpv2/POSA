@@ -21,6 +21,7 @@ export type Study = {
   reportStatus: ReportStatus;
   uploadId: string | null;
   patientId: string | null;
+  clinicianId: string | null;
   durationSeconds: number;
   runId: string | null;
   errorMessage: string;
@@ -29,7 +30,7 @@ export type Study = {
 const initial: Study = {
   fileName: null, fileSize: 0, format: null, sampleRate: null, lead: '', metadata: '',
   studyId: '', age: '', sex: '', bmi: '', status: 'empty', progress: 0,
-  reportStatus: 'Draft', uploadId: null, patientId: null, durationSeconds: 0,
+  reportStatus: 'Draft', uploadId: null, patientId: null, clinicianId: null, durationSeconds: 0,
   runId: null, errorMessage: '',
 };
 

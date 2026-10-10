@@ -103,7 +103,7 @@ def _bearer_token(authorization: str | None) -> str:
     return authorization[7:].strip()
 
 
-def _authorized_study(upload_id: str, token: str) -> dict[str, Any]:
+def _authorized_study(upload_id: str, token: str, require_owner: bool = False) -> dict[str, Any]:
     client = _storage_client()
     try:
         user_response = client.auth.get_user(token)
@@ -113,6 +113,12 @@ def _authorized_study(upload_id: str, token: str) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Your session expired. Sign in again.") from exc
     if user is None:
         raise HTTPException(status_code=401, detail="Your session expired. Sign in again.")
+    app_metadata = user.app_metadata or {}
+    providers = app_metadata.get("providers") if isinstance(app_metadata, dict) else None
+    if (app_metadata.get("provider") if isinstance(app_metadata, dict) else None) != "google" and not (
+        isinstance(providers, list) and "google" in providers
+    ):
+        raise HTTPException(status_code=403, detail="Sign in with Google to access clinical studies.")
 
     result = client.table("ecg_uploads").select(
         "id, patient_id, clinician_id, record_code, storage_path, original_filename, sampling_rate_hz, duration_seconds, deleted_at"
@@ -120,12 +126,8 @@ def _authorized_study(upload_id: str, token: str) -> dict[str, Any]:
     study = result.data
     if not study or study.get("deleted_at"):
         raise HTTPException(status_code=404, detail="Study not found.")
-    if study["clinician_id"] != user.id:
-        linked = client.table("clinician_patients").select("patient_id").eq(
-            "clinician_id", user.id
-        ).eq("patient_id", study["patient_id"]).is_("deleted_at", "null").limit(1).execute()
-        if not linked.data:
-            raise HTTPException(status_code=403, detail="You do not have access to this study.")
+    if require_owner and study["clinician_id"] != user.id:
+        raise HTTPException(status_code=403, detail="Only the study owner can start or restart analysis.")
     return study
 
 
@@ -757,7 +759,7 @@ def study_diagnostics(upload_id: str, authorization: str | None = Header(default
 def start_analysis(upload_id: str, authorization: str | None = Header(default=None)) -> dict[str, str]:
     global model_id
     token = _bearer_token(authorization)
-    study = _authorized_study(upload_id, token)
+    study = _authorized_study(upload_id, token, require_owner=True)
     client = _storage_client()
     latest_response = client.table("prediction_runs").select("id,status").eq(
         "ecg_upload_id", upload_id
@@ -874,7 +876,7 @@ def start_study_summary(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     token = _bearer_token(authorization)
-    study = _authorized_study(upload_id, token)
+    study = _authorized_study(upload_id, token, require_owner=True)
     client = _storage_client()
     runs = client.table("prediction_runs").select("id,status,summary_status,summary_progress_percent,summary_stage,summary_error_message").eq(
         "ecg_upload_id", upload_id

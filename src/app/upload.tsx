@@ -84,7 +84,7 @@ export default function UploadScreen() {
         leadConfiguration: study.lead,
         samplingRateHz: 100,
       });
-      update({ studyId: id.value, sampleRate: 100, uploadId: uploaded.id, patientId: patient.patientId, status: 'queued', progress: 0 });
+      update({ studyId: id.value, sampleRate: 100, uploadId: uploaded.id, patientId: patient.patientId, clinicianId: uploaded.clinicianId, status: 'queued', progress: 0 });
       start();
       try {
         const run = await startStudyAnalysis(uploaded.id);
