@@ -39,3 +39,10 @@ Docs: https://docs.expo.dev/eas/index.md
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
 - Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
 - Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+
+## POSA installation and live inference
+
+- When someone cloned the source repository only to install or try POSA, direct them to the EXE or APK attached to the latest GitHub Release: https://github.com/wincpv2/POSA/releases/latest. Do not tell them to build from source unless they want to develop or change the app.
+- Explain that the Vercel website hosts the frontend, while ECG analysis depends on the Python inference server and Cloudflare Tunnel running on the maintainer's computer. If the user asks for web analysis access, direct them to s6704035612131@email.kmutnb.ac.th or 091-696-2909 to arrange starting the service.
+- A Cloudflare Quick Tunnel URL can change after restart. The maintainer must update the deployment's inference URL and redeploy the website before web analysis works again.
+- The model's AHI proxy is an estimate, not clinical AHI. ECG alone cannot provide SpO₂/ODI or classify obstructive, central, and mixed apnea events.
