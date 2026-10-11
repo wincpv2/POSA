@@ -1,201 +1,272 @@
 # POSA — Predictor of Obstructive Sleep Apnea
 
-แอป React Native (Expo) สำหรับแพทย์และบุคลากรห้องแล็บการนอนหลับ ใช้อัปโหลดสัญญาณ ECG ของผู้ป่วย
-ดูผลการตรวจ เขียนรายงานและลงนาม แล้วส่งผลให้ผู้ป่วยดูผ่าน QR code หรือลิงก์ได้
+**แอปช่วยคัดกรองภาวะหยุดหายใจขณะหลับ (Obstructive Sleep Apnea, OSA) จากสัญญาณ ECG**
+แพทย์อัปโหลดคลื่นไฟฟ้าหัวใจตลอดคืน → โมเดล Deep Learning วิเคราะห์ทีละนาที → แพทย์ตรวจผล เขียนรายงาน
+และลงนาม → ผู้ป่วยเปิดดูผลของตัวเองผ่าน QR code หรือลิงก์
 
-> **สถานะ:** App uploads real WFDB recordings to Supabase and sends them to the local SE-ResNet50-1D inference service. Model results are persisted for clinician review.
+### 🎬 [ดูวิดีโอสาธิตวิธีใช้งาน (Google Drive)](https://drive.google.com/drive/folders/1AqCBWkFVapTJ-2_uzj6I95ZVFECWn7M4?usp=sharing)
 
-ผู้ดูแลส่วน backend / database: Panut Anan ([@tonnow2005](https://github.com/tonnow2005), panuttonnow520@gmail.com)
+> [!IMPORTANT]
+> ระบบช่วยวิเคราะห์ด้วย AI เพื่อการสาธิตและการศึกษาทางวิศวกรรมชีวการแพทย์เท่านั้น
+> ไม่ใช่เครื่องมือทดแทนการวินิจฉัยหรือการตัดสินใจโดยบุคลากรทางการแพทย์
 
-## ทีม
+---
+
+## สารบัญ
+- [ภาพรวม](#ภาพรวม)
+- [ฟีเจอร์](#ฟีเจอร์)
+- [สถาปัตยกรรม](#สถาปัตยกรรม)
+- [Tech stack](#tech-stack)
+- [โครงสร้างโปรเจกต์](#โครงสร้างโปรเจกต์)
+- [การติดตั้งและรัน](#การติดตั้งและรัน)
+- [การ build และ deploy](#การ-build-และ-deploy)
+- [ไฟล์ข้อมูลที่รองรับ](#ไฟล์ข้อมูลที่รองรับ)
+- [ความปลอดภัยและความเป็นส่วนตัว](#ความปลอดภัยและความเป็นส่วนตัว)
+- [ข้อจำกัด](#ข้อจำกัด)
+- [ทีมผู้พัฒนา](#ทีมผู้พัฒนา)
+
+---
+
+## ภาพรวม
+
+การตรวจการนอนหลับมาตรฐาน (Polysomnography) มีราคาสูงและต้องนอนที่โรงพยาบาล POSA ทดลองใช้
+**สัญญาณ ECG lead เดียว** ซึ่งเก็บง่ายกว่ามาก มาประเมินช่วงที่น่าจะเป็นภาวะหยุดหายใจ เพื่อช่วยแพทย์คัดกรองเบื้องต้น
+
+```mermaid
+flowchart LR
+    A[แพทย์อัปโหลด ECG<br/>WFDB .hea + .dat] --> B[Supabase Storage]
+    B --> C[Inference service<br/>SE-ResNet50-1D]
+    C -->|ผลรายนาที| D[(Supabase Postgres)]
+    D --> E[แพทย์ตรวจผล<br/>เขียนรายงาน + ลงนาม]
+    E --> F[PDF ฉบับ Approved]
+    E --> G[ผู้ป่วยเปิดผลผ่าน<br/>QR / ลิงก์]
+```
+
+---
+
+## ฟีเจอร์
+
+### 👩‍⚕️ ฝั่งแพทย์ (login ด้วย Google)
+| หน้า | ทำอะไรได้ |
+|---|---|
+| **Home** | รายการการตรวจทั้งหมด ค้นหาและกรองตามสถานะได้ ลบแบบ soft delete พร้อมปุ่ม Undo |
+| **Upload** | อัปโหลดไฟล์ WFDB อ่านค่า sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม |
+| **Processing** | ติดตามความคืบหน้าการวิเคราะห์ของโมเดล และกู้งานที่ค้างได้เมื่อ service รีสตาร์ท |
+| **Detail** | ดูคลื่น ECG ทีละนาที แบบ raw / filtered พร้อม R-peak, อัตราการเต้นหัวใจ และช่วงที่โมเดลจัดเป็น apnea ไล่ดูทั้งคืนได้ และบันทึกอาการที่สังเกตระหว่างเล่นสัญญาณได้ |
+| **Summary** | ผลจากโมเดล (นาทีที่วิเคราะห์ / นาทีที่เป็น apnea / สัดส่วน) และกราฟสรุปทั้งคืน |
+| **Report** | เขียน *Clinician opinion* และ *Patient explanation* สถานะ Draft → Reviewed → Approved (ย้อนกลับได้) ระบบ**ลงนามด้วยชื่อจากบัญชีที่ login พร้อมเวลา** รายงานที่ Approved แล้วถูกล็อก และ**เก็บ PDF ฉบับ Approved ไว้ใน Supabase อัตโนมัติ** |
+| **Patient link** | สร้าง QR code และลิงก์ Dashboard ให้ผู้ป่วย มีวันหมดอายุ |
+| **Deletion log** | ดูว่าใครลบหรือกู้คืนการตรวจไหน เมื่อไหร่ ของผู้ป่วยทุกคนที่ตัวเองดูแล บันทึกนี้แก้หรือลบไม่ได้ |
+| **Server status** | ตรวจสถานะการเชื่อมต่อกับ inference service |
+
+### 🧑 ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
+- เปิดแอป → **I'm a patient** → **Scan QR** หรือ **Paste link** ที่ได้จากแพทย์
+- **Dashboard ผลการนอน:** ผลทุกคืนที่ตรวจ และเมื่อแพทย์ Approve รายงานแล้ว จะเห็น AHI โดยประมาณ, ระดับความรุนแรง และ**ข้อความจากแพทย์**
+
+- **สลับภาษาไทย / อังกฤษ**ได้ และดาวน์โหลดรายงาน PDF ฉบับ Approved ได้
+- ระบบไม่แสดงชื่อ รหัสภายใน หรือความเห็นของแพทย์ (Clinician opinion) ให้ผู้ป่วยเห็น
+
+### 🧠 โมเดล ML
+- สถาปัตยกรรม **SE-ResNet50-1D** (1D ResNet + Squeeze-and-Excitation)
+- รับ ECG ที่ **100 Hz** เป็นหน้าต่างละ **60 วินาที** แล้วจัดแต่ละนาทีเป็น apnea / normal ที่ threshold 0.5
+- เทรนด้วยชุดข้อมูล **PhysioNet Apnea-ECG** (label รายนาที)
+- หา R-peak จาก QRS annotation (ถ้ามี) หรือใช้อัลกอริทึม XQRS
+
+---
+
+## สถาปัตยกรรม
+
+```mermaid
+flowchart TB
+    subgraph Client["แอป POSA (Expo / React Native)"]
+        W[Web]
+        M[Android APK]
+        D[Windows desktop<br/>Electron]
+    end
+    subgraph SB["Supabase"]
+        AU[Auth<br/>Google OAuth]
+        DB[(Postgres + RLS)]
+        ST[Storage<br/>ecg-files · report-pdfs]
+        FN[Edge Function<br/>patient-report-download]
+    end
+    INF["Inference service<br/>FastAPI · PyTorch<br/>:8010"]
+
+    Client <--> AU
+    Client <--> DB
+    Client <--> ST
+    Client <--> FN
+    Client -->|เริ่มวิเคราะห์ / ดึงสัญญาณ| INF
+    INF <-->|อ่านไฟล์ · เขียนผล| SB
+```
+
+**Inference API** (`inference/service.py`)
+
+| Method | Path | หน้าที่ |
+|---|---|---|
+| GET | `/health`, `/v1/health` | ตรวจสถานะ service |
+| POST | `/v1/studies/{upload_id}/analysis` | เริ่มวิเคราะห์การตรวจ (ทำงานเบื้องหลัง) |
+| GET | `/v1/studies/{upload_id}/signal` | ดึงสัญญาณ ECG รายนาทีสำหรับหน้า Detail |
+| GET | `/v1/studies/{upload_id}/timeline` | ข้อมูล timeline ทั้งคืน |
+| GET / POST | `/v1/studies/{upload_id}/summary` | สร้าง / อ่านสรุปทั้งคืน |
+| GET | `/v1/studies/{upload_id}/diagnostics` | ข้อมูลวินิจฉัยปัญหาของงานวิเคราะห์ |
+
+---
+
+## Tech stack
+
+| ส่วน | เทคโนโลยี |
+|---|---|
+| แอป | Expo SDK 57, React Native, `expo-router`, TypeScript |
+| Desktop | Electron + electron-builder (Windows installer) |
+| Backend | Supabase: Postgres, Row Level Security, Auth (Google OAuth), Storage, Edge Functions |
+| ML service | Python, FastAPI, Uvicorn, PyTorch, NumPy, SciPy, `wfdb`, Matplotlib |
+| PDF | `expo-print` (มือถือ), `html2pdf.js` (เว็บ) |
+| QR | `expo-camera` (สแกน), `react-native-qrcode-svg` (สร้าง) |
+
+---
+
+## โครงสร้างโปรเจกต์
+
+```
+POSA/
+├── src/
+│   ├── app/                 หน้าจอ (expo-router): home, upload, processing, detail, summary,
+│   │                        activity (deletion log), p/[token] (dashboard ผู้ป่วย), shared/[token], auth
+│   ├── components/          UI, ECG monitor, รายงาน PDF, หน้าจอฝั่งผู้ป่วย
+│   └── lib/                 Supabase client, auth, queries, inference client, offline cache
+├── inference/               Inference service (FastAPI + โมเดล PyTorch)
+├── supabase/
+│   ├── migrations/          schema, RLS และฟังก์ชันในฐานข้อมูลทั้งหมด
+│   └── functions/           Edge Functions
+├── desktop/                 แอป Windows (Electron)
+├── app.json · eas.json      ตั้งค่า Expo และการ build Android
+└── vercel.json              ตั้งค่า deploy เว็บ
+```
+
+---
+
+## การติดตั้งและรัน
+
+### สิ่งที่ต้องมี
+- **Node.js 24 LTS** (หรือ 22 LTS) และ npm
+- **Python 3** สำหรับ inference service
+- โปรเจกต์ **Supabase** และ OAuth client ของ **Google Cloud**
+- ไฟล์ checkpoint ของโมเดลที่เทรนแล้ว (ขอได้จากทีม ML ไม่ได้อยู่ใน repo)
+
+### 1. ติดตั้ง dependencies ของแอป
+```bash
+git clone https://github.com/wincpv2/POSA.git
+cd POSA
+npm install
+```
+
+### 2. ตั้งค่า environment ของแอป
+คัดลอก `.env.example` เป็น `.env` แล้วใส่ค่า:
+```
+EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable / anon key>
+EXPO_PUBLIC_INFERENCE_API_URL=http://127.0.0.1:8010
+```
+> ในแอปใช้แค่ publishable key คู่กับ RLS **ห้ามใส่ `service_role` key ในแอปเด็ดขาด**
+> และห้าม commit ไฟล์ `.env` (ไฟล์นี้ถูก ignore ไว้แล้ว)
+
+### 3. ตั้งค่า Supabase
+```bash
+npx supabase login
+npx supabase link --project-ref <project-ref>
+npx supabase db push
+```
+- **Authentication → Providers → Google:** ใส่ Client ID / Secret จาก Google Cloud Console
+- **Authentication → URL Configuration → Redirect URLs:** เพิ่ม `posaapp://auth/callback`
+  และ URL ของเว็บที่ใช้ (เช่น `http://localhost:8081/**`)
+- Deploy Edge Function: `npx supabase functions deploy patient-report-download`
+
+### 4. รัน inference service
+```bash
+cd inference
+python -m venv .venv
+.venv\Scripts\activate            # macOS / Linux: source .venv/bin/activate
+pip install -r requirements.txt
+pip install torch                 # เลือก wheel ที่รองรับ CUDA ได้ถ้าต้องการใช้ GPU
+```
+คัดลอก `inference/.env.example` เป็น `inference/.env`:
+```
+POSA_MODEL_PATH=<path ไปยังไฟล์ checkpoint ของโมเดล>
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=<publishable key>
+SUPABASE_SERVICE_ROLE_KEY=<service role key>   # ใช้ฝั่ง server เท่านั้น
+```
+จากโฟลเดอร์หลักของโปรเจกต์:
+```bash
+python -m uvicorn inference.service:app --host 127.0.0.1 --port 8010
+```
+บน Windows ใช้ `inference/start_server.ps1` เพื่อรันเบื้องหลังได้ (log อยู่ที่ `%LOCALAPPDATA%\POSA`)
+และเช็กว่า service ทำงานด้วย `http://127.0.0.1:8010/health`
+
+### 5. รันแอป
+```bash
+npm run web            # เปิดบนเว็บ
+npm run android        # Android (Expo)
+npm run desktop:dev    # แอป Windows (Electron)
+```
+> ถ้า PowerShell ขึ้น error เรื่อง execution policy ให้ใช้ `npx.cmd` / `npm.cmd` แทน
+
+ตรวจโค้ดก่อน commit:
+```bash
+npx tsc --noEmit
+npx expo lint
+```
+
+---
+
+## การ build และ deploy
+
+| เป้าหมาย | คำสั่ง / วิธี |
+|---|---|
+| **Android APK** | `npx eas-cli build --platform android --profile preview` (profile `preview` ใน `eas.json` สร้างไฟล์ `.apk`) |
+| **Windows** | `npm run desktop:build` (สร้าง installer NSIS ใน `desktop/`) |
+| **Web** | `npx expo export --platform web` แล้ว deploy ผ่าน Vercel (`vercel.json`) |
+
+หลัง deploy เว็บ อย่าลืมเพิ่ม URL ของเว็บใน Supabase → Redirect URLs
+
+---
+
+## ไฟล์ข้อมูลที่รองรับ
+- **WFDB:** ไฟล์ header `.hea` คู่กับไฟล์สัญญาณ `.dat` ชื่อเดียวกัน
+- สัญญาณ ECG ต้องสุ่มที่ **100 Hz** (ตรงกับที่โมเดลเทรนมา)
+- ตัวอย่างข้อมูลทดสอบ: [PhysioNet Apnea-ECG Database](https://physionet.org/content/apnea-ecg/)
+
+---
+
+## ความปลอดภัยและความเป็นส่วนตัว
+- **Row Level Security ทุกตาราง:** แพทย์เห็นเฉพาะผู้ป่วยที่ตัวเองดูแล และแพทย์ที่ดูแลผู้ป่วยคนเดียวกันเห็นประวัติร่วมกันได้
+- **ไม่เก็บชื่อผู้ป่วย:** ใช้รหัสแทน (de-identified)
+- **ไฟล์ ECG และ PDF อยู่ใน bucket แบบ private:** ดาวน์โหลดผ่านลิงก์ชั่วคราวเท่านั้น
+- **ผู้ป่วยไม่มีบัญชี:** เข้าถึงผ่าน token สุ่มยาว 64 ตัวอักษรที่มีวันหมดอายุ และได้เฉพาะข้อมูลที่จำเป็น
+- **การลงนามปลอมไม่ได้:** ชื่อและเวลาลงนามถูกบันทึกโดยฐานข้อมูลจากบัญชีที่ login
+- **Soft delete + audit log:** ข้อมูลไม่ถูกลบจริง ทุกการลบและกู้คืนถูกบันทึกไว้
+- **`service_role` key ใช้เฉพาะใน inference service** ไม่อยู่ในแอป
+
+---
+
+## ข้อจำกัด
+- **เป็นเครื่องมือเพื่อการศึกษา** ผลจากโมเดลต้องให้แพทย์ตีความเสมอ
+- ใช้ **ECG lead เดียว** จึง**ไม่มีค่า SpO₂ / ODI** (ต้องใช้เครื่องวัดออกซิเจน) และแยกชนิดของ apnea
+  (obstructive / central / mixed) หรือ hypopnea ได้ไม่ชัดเท่า Polysomnography
+- โมเดลให้ผลเป็น**รายนาที** ค่า AHI ที่แสดงจึงเป็น**ค่าประมาณ**
+- ตอนนี้รองรับเฉพาะไฟล์ WFDB ที่ 100 Hz
+
+---
+
+## ทีมผู้พัฒนา
 
 | บทบาท | ชื่อ |
 |---|---|
 | UI/UX Designer | Pisit Pipathanabenjakul |
 | Researcher | Papangkorn Bennarong |
 | ML Engineer | Worraprach Srirattananon |
-| Mobile App Developer (เชื่อม frontend↔backend, storage/database) | Panut Anan |
+| Mobile App Developer (frontend ↔ backend, storage / database) | Panut Anan ([@tonnow2005](https://github.com/tonnow2005)) |
 
-## Tech stack
+---
 
-- **แอป:** Expo SDK 57 / React Native และ routing แบบ file-based ของ `expo-router`
-- **Backend:** [Supabase](https://supabase.com) ได้แก่ Postgres, Auth, Storage และ Row Level Security (RLS)
-- **Login:** Google OAuth ผ่าน Supabase Auth
-- **PDF:** `expo-print` บนมือถือ และ `html2pdf.js` บนเว็บ
-- **QR:** `expo-camera` สำหรับสแกน และ `react-native-qrcode-svg` สำหรับสร้าง
-- **ML:** Trained SE-ResNet50-1D checkpoint; per-minute inference on 100 Hz ECG.
-
-## ฟีเจอร์
-
-### ฝั่งแพทย์ (ต้อง login ด้วย Google)
-- **หน้าแรกเลือกบทบาท:** "I'm a clinician" หรือ "I'm a patient"
-- **Home:** รายการการตรวจจริงจาก Supabase ค้นหาและกรองได้ และ**ลบแบบ soft delete** พร้อมปุ่ม Undo
-  (เฉพาะการตรวจที่ตัวเองอัปโหลด)
-- **Upload:** อัปโหลดไฟล์ EDF, WFDB (`.hea` + `.dat`) หรือรูปภาพ ขึ้น Storage แบบ private
-  อ่าน sampling rate และ lead จาก header ให้อัตโนมัติ ถ้ากรอกรหัสผู้ป่วยซ้ำ ระบบจะใช้ผู้ป่วยคนเดิม
-- **Detail:** หน้าดูสัญญาณ ECG (เล่น, ซูม, เลือกช่วงเวลา, เลื่อนไป apnea event ก่อนหน้า/ถัดไป)
-  ตอนนี้แสดงกราฟได้เฉพาะรายการตัวอย่าง (SAMPLE) ส่วนการตรวจจริงจะแสดงเมื่อเชื่อมต่อ API ของ ML แล้ว
-- **Summary / Results:** ตัวเลขสรุปเดิม + แผงผลการนอน AHI (AI, HI), Events Breakdown
-  (Obstructive / Central / Mixed / Hypopnoea) และ ODI (SpO₂ Baseline / Avg / Lowest) พร้อมคำอธิบายภาษาไทย
-  ตอนนี้แสดง “—” จนกว่าจะเชื่อมผลวิเคราะห์ (ODI / SpO₂ ต้องมีเครื่องวัดออกซิเจนร่วมด้วย ECG อย่างเดียววัดไม่ได้)
-- **Summary / Report:**
-  - แพทย์เขียน **Clinician opinion** และ **Patient explanation** เอง แล้วบันทึกลงฐานข้อมูล
-  - สถานะ Draft → Reviewed → Approved และย้อนกลับได้
-  - **ลงนามอัตโนมัติ** ด้วยชื่อจากบัญชีที่ login พร้อมวันเวลา รายงานที่ Approved แล้วจะถูกล็อกไม่ให้แก้
-  - **Export PDF / Print** ฉบับที่ยังไม่ Approved จะมีลายน้ำ DRAFT / REVIEWED
-  - **ฉบับ Approved เก็บเป็น PDF ใน Supabase อัตโนมัติ** มีหลายเวอร์ชันได้ และดาวน์โหลดย้อนหลังได้
-- **ลิงก์ Dashboard ผู้ป่วย:** สร้าง QR code และลิงก์ให้ผู้ป่วย อายุ 90 วัน
-- **Deletion log:** ดูว่าใครลบหรือกู้คืนการตรวจไหน เมื่อไหร่ ของผู้ป่วยทุกคนที่ตัวเองผูกอยู่ รวมถึงที่หมอคนอื่นทำ
-  (มีกล่องสรุปในหน้า Home และหน้าเต็มที่ `/activity`) แก้หรือลบ log ไม่ได้
-- **เมนูบัญชี:** มุมขวาบน มีชื่อ, Deletion log และปุ่ม Sign out
-
-### ฝั่งผู้ป่วย (ไม่ต้องมีบัญชี)
-- **Scan QR** (ค่าเริ่มต้น) หรือ **Paste link** เพื่อเปิด Dashboard ของตัวเอง
-- **Dashboard:** เห็นทุกคืนที่ตรวจ รวมถึงคืนที่อัปโหลดทีหลัง, **รูปสรุป**พร้อมแถบระดับความรุนแรงตาม AHI,
-  **พารามิเตอร์ชุดเดียวกับหน้า Summary ของแพทย์** (คำอธิบายภาษาง่าย) และเห็น **ข้อความจากแพทย์**
-  (Patient explanation) เฉพาะคืนที่แพทย์ Approve รายงานแล้ว
-- ไม่แสดงชื่อ รหัสผู้ป่วย หรือความเห็นของแพทย์ (Clinician opinion) ให้ผู้ป่วยเห็น
-
-## เริ่มต้นใช้งาน
-
-### 1. ติดตั้ง dependencies
-
-```bash
-npm install
-```
-
-### 2. ตั้งค่า environment variables
-
-คัดลอก `.env.example` เป็น `.env` แล้วกรอกค่าจริงจาก Supabase dashboard
-(**Project Settings → Data API** สำหรับ URL และ **Project Settings → API Keys** สำหรับ key)
-
-```bash
-cp .env.example .env
-```
-
-```
-EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
-EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<anon/publishable key>
-```
-
-> **ห้ามใช้ `service_role` key ในแอปเด็ดขาด** แอปใช้แค่ anon/publishable key คู่กับ RLS
-> และ**ห้าม commit `.env`** เข้า git (ไฟล์นี้ถูก ignore ไว้แล้ว) ให้ commit แค่ `.env.example`
-
-### 3. ตั้งค่า Supabase Auth
-
-- **Authentication → Providers → Google:** ใส่ Client ID / Secret จาก Google Cloud Console
-- **Authentication → URL Configuration → Redirect URLs:** เพิ่ม `posaapp://auth/callback`
-  (สำหรับมือถือ) และ `http://localhost:8081/**` (สำหรับเว็บตอนพัฒนา)
-
-### 4. รันแอป
-
-```bash
-npx expo start        # เลือก w เพื่อเปิดบนเว็บ
-npx expo start --web  # หรือเปิดบนเว็บเลย
-```
-
-ตรวจโค้ดก่อน commit ทุกครั้ง:
-
-```bash
-npx tsc --noEmit
-npx expo lint
-```
-
-## Backend (Supabase)
-
-Migration ทั้งหมดอยู่ใน `supabase/migrations/` (19 ไฟล์) รันผ่าน Supabase CLI ได้โดยไม่ต้องติดตั้งแยก
-
-```bash
-npx supabase login
-npx supabase link --project-ref <your-project-ref>
-npx supabase db push
-npx supabase gen types typescript --linked > src/lib/database.types.ts
-```
-
-### ตาราง
-
-| ตาราง | เก็บอะไร |
-|---|---|
-| `profiles` | บัญชีแพทย์ (1:1 กับ `auth.users`) มีชื่อสำหรับลงนาม และ `consent_accepted` |
-| `patients` | ตัวตนผู้ป่วยแบบใช้ร่วมกัน (เพศ, BMI) ไม่มีชื่อจริง |
-| `clinician_patients` | ความสัมพันธ์แพทย์↔ผู้ป่วย และรหัสผู้ป่วยที่แพทย์แต่ละคนตั้งเอง แพทย์ที่ผูกกับผู้ป่วยคนเดียวกันจะเห็นการตรวจของกันและกัน |
-| `ecg_uploads` | 1 แถวต่อการตรวจ 1 ครั้ง มีไฟล์ใน bucket `ecg-files`, Hz, lead, อายุ (`age_years`) และ soft delete ด้วย `deleted_at` |
-| `study_reports` | รายงานที่แพทย์เขียน (opinion, patient explanation), สถานะ และผู้ลงนามกับเวลา |
-| `report_pdfs` | PDF ฉบับ Approved ที่เก็บใน bucket `report-pdfs` |
-| `study_share_links` | ลิงก์ผลตรวจรายครั้ง (อายุ 30 วัน) |
-| `patient_share_links` | ลิงก์ Dashboard ผู้ป่วย (อายุ 90 วัน) |
-| `models` | ทะเบียนโมเดล ML (อ่านได้อย่างเดียว) |
-| `audit_log` | ประวัติการลบและกู้คืน เขียนได้ผ่านฟังก์ชันฝั่ง server เท่านั้น |
-
-**ยังไม่ได้สร้าง:** `predictions`, `prediction_minutes`, `sleep_sessions` เพราะรอ ML output contract
-
-### ฟังก์ชันในฐานข้อมูล
-
-| ฟังก์ชัน | หน้าที่ |
-|---|---|
-| `handle_new_user` (trigger) | สร้าง profile พร้อมชื่อจาก Google ตอนสมัคร |
-| `account_display_name` | ชื่อบัญชีสำหรับลงนาม (display name → ชื่อ Google → อีเมล) |
-| `study_reports_sign_off` (trigger) | บังคับลำดับสถานะ, ลงชื่อและเวลา, ล็อกรายงานที่ Approved |
-| `soft_delete_ecg_upload` / `restore_ecg_upload` | ลบหรือกู้คืนการตรวจ (เฉพาะคนที่อัปโหลด) และบันทึกลง `audit_log` |
-| `get_shared_study` | ข้อมูลผลตรวจรายครั้งสำหรับผู้ป่วยที่ไม่ได้ login |
-| `get_deletion_log` | อ่าน log การลบและกู้คืน เฉพาะผู้ป่วยที่หมอคนนั้นผูกอยู่ |
-| `get_patient_dashboard` | ข้อมูล Dashboard ผู้ป่วย (คืนเป็น JSON เพื่อเพิ่มพารามิเตอร์ได้ภายหลัง) |
-| `hook_restrict_signup_domain` | Auth hook เดิมที่คงไว้เพื่อความเข้ากันได้ แต่ตอนนี้อนุญาตบัญชีทุกอีเมล |
-
-## โครงสร้างไฟล์หลัก
-
-```
-src/
-  app/                 หน้าจอ (expo-router)
-    _layout.tsx        ตัวกั้น login + เลือกบทบาท
-    index.tsx          Home (รายการการตรวจ, ลบ/Undo)
-    upload.tsx         อัปโหลดการตรวจ
-    detail.tsx         ดูสัญญาณ ECG
-    summary.tsx        รายงาน, ลงนาม, PDF
-    activity.tsx       Deletion log
-    p/[token].tsx      Dashboard ผู้ป่วย (ลิงก์)
-    shared/[token].tsx ผลตรวจรายครั้ง (ลิงก์)
-  components/          UI และหน้าจอฝั่งผู้ป่วย, report-export (PDF)
-  lib/
-    supabase.ts        Supabase client (ใช้แค่ publishable key)
-    auth-context.tsx   Google login, session, สร้าง profile
-    queries.ts         ฟังก์ชันอ่าน/เขียนข้อมูลทั้งหมด
-supabase/migrations/   schema, RLS และฟังก์ชันทั้งหมด
-```
-
-## ความปลอดภัย
-
-- **RLS คือด่านป้องกันตัวจริง** การกรองข้อมูลฝั่งแอปเป็นแค่ความสะดวก ไม่ใช่การป้องกัน
-- **ผู้ป่วยไม่มีบัญชี** ลิงก์และ QR ใช้ token สุ่มยาว 64 ตัวอักษร (256 bit) มีวันหมดอายุ
-  และข้อมูลส่งผ่านฟังก์ชันที่คัดเฉพาะข้อมูลที่ปลอดภัย ไม่มีรหัสผู้ป่วยหรือความเห็นของแพทย์
-- **ลบแบบ soft delete** ข้อมูลและไฟล์ไม่ถูกลบจริง และทุกการลบหรือกู้คืนถูกบันทึกลง `audit_log`
-- **ผู้ลงนามปลอมไม่ได้** ชื่อและเวลาลงนามมาจากบัญชีที่ login ผ่าน trigger ในฐานข้อมูล
-- ความลับ (service_role key, OAuth secret, ข้อมูลผู้ป่วยจริง) ห้ามเข้า git
-  ตรวจได้ด้วย `git log --all --full-history -- .env` ซึ่งต้องได้ผลว่าง
-- ระบบเป็น**เครื่องมือเพื่อการศึกษาด้านวิศวกรรมชีวการแพทย์** ไม่ใช่เครื่องมือวินิจฉัย
-  (แสดง disclaimer ในหน้า Login, หน้าผู้ป่วย และใน PDF)
-
-## สิ่งที่ยังไม่ได้ทำ
-
-- เชื่อมต่อโมเดล ML (ต้องตกลง output contract กับทีม ML ก่อน: label และ probability รายนาที, R-peaks, beat labels)
-- ค่าจริงของ AHI / Events / ODI (UI พร้อมแล้ว รอผลจาก ML และสัญญาณ SpO₂) — นิยามทั้งหมดอยู่ที่ `src/components/sleep-results-data.ts`
-- Tier 3: ปุ่มขอลบบัญชีหรือข้อมูล, Privacy Policy, บัญชีสำหรับ reviewer
-- ทดสอบบนมือถือจริง (ตอนนี้ทดสอบบนเว็บเป็นหลัก)
-
-## Local trained model inference
-
-The app now sends uploaded WFDB records to a local FastAPI service. The service runs the SE-ResNet50-1D checkpoint on complete 60-second, 100 Hz ECG windows and saves per-minute probabilities and classes in Supabase. Only clinician-approved aggregate results are returned to patient links.
-
-1. Apply `supabase/migrations/20261004000010_ml_predictions.sql` to the project database before using inference. This adds run/result tables and updates patient result RPCs.
-2. Copy `inference/.env.example` to `inference/.env`. Set `POSA_MODEL_PATH` to the local `se_resnet50_epoch_05.pt`, and set the server-side `SUPABASE_URL`, publishable key, and **service role key**. Keep this file private; the service role key must never go in the Expo `.env`.
-3. Create a Python environment and install `inference/requirements.txt`. Install a PyTorch build separately if the machine does not already provide one; CPU inference is supported.
-4. Start the API from the repository root with `python -m uvicorn inference.service:app --host 0.0.0.0 --port 8010`.
-5. Set `EXPO_PUBLIC_INFERENCE_API_URL=http://localhost:8010` in the app `.env` and start Expo. Use a device-visible host address instead of `localhost` when running the app on a physical phone.
-
-The upload accepts one matching `.hea`/`.dat` pair at exactly 100 Hz. The ECG detail view displays the stored signal and model probability for each minute. Model outputs are research predictions, not a diagnosis.
-
-To smoke-check the checkpoint on the first four records of the notebook's recreated held-out Test split, run:
-
-`python -m inference.smoke_test --data-dir "D:/path/to/apnea-ecg-data" --model "D:/path/to/se_resnet50_epoch_05.pt"`
-
-The script requires the matching 78-record annotation set used by the notebook. The currently configured dataset folder has a different record count, so it cannot verify the held-out split until the matching data folder is supplied.
+<sub>POSA · โครงงานวิศวกรรมชีวการแพทย์ · 2026</sub>
