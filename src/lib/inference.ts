@@ -1,4 +1,6 @@
-import { supabase } from './supabase';
+import { archiveRequest, datasetMode } from './local-dataset';
+import { getSupabase } from './supabase';
+import { localServiceUrl } from './local-service-url';
 import {
   clearStaleStudyOfflineCache,
   readSignalCache,
@@ -53,12 +55,12 @@ export type RecordSummary = {
     thresholdApneaMinutes: number | null;
     thresholdApneaSharePercent: number | null;
     predictedRuns: number | null;
-    threshold: number;
+    threshold: number | null;
   };
 };
 
 type AnalysisStart = { runId: string; status: 'queued' | 'processing' | 'completed' };
-export type RecordTimeline = { uploadId: string; runId: string; durationSeconds: number; source: 'model_prediction'; svg: string };
+export type RecordTimeline = { uploadId: string; runId: string; durationSeconds: number; source: 'model_prediction' | 'model_probability'; svg: string };
 export type SummaryJob = { runId: string; status: 'not_started' | 'queued' | 'processing' | 'completed' | 'failed'; progressPercent: number; stage: string | null; error: string | null };
 export type StudyDiagnostics = {
   checkedAt: string;
@@ -96,13 +98,20 @@ export type OfflineSignalProgress = {
 const offlineDownloads = new Map<string, AbortController>();
 
 function apiUrl() {
-  const value = process.env.EXPO_PUBLIC_INFERENCE_API_URL;
-  if (!value) throw new Error('Set EXPO_PUBLIC_INFERENCE_API_URL to the local inference server URL.');
-  return value.replace(/\/$/, '');
+  return localServiceUrl(
+    process.env.EXPO_PUBLIC_POSA_INFERENCE_URL || 'http://127.0.0.1:8010',
+    'EXPO_PUBLIC_POSA_INFERENCE_URL',
+  );
 }
 
 async function request(path: string, init: RequestInit = {}) {
-  const { data, error } = await supabase.auth.getSession();
+  if (datasetMode) {
+    const response = await fetch(`/api/dataset/service${path}`, init);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Local analysis request failed.');
+    return payload;
+  }
+  const { data, error } = await getSupabase().auth.getSession();
   const token = data.session?.access_token;
   if (error || !token) throw new Error('Sign in again before starting analysis.');
   const response = await fetch(`${apiUrl()}${path}`, {
@@ -137,6 +146,7 @@ export function getSignalMinute(uploadId: string, minute: number, mode: 'raw' | 
 }
 
 export function getRecordSummary(uploadId: string) {
+  if (datasetMode) return archiveRequest<RecordSummary>(`/service/v1/studies/${encodeURIComponent(uploadId)}/summary`);
   return request(`/v1/studies/${encodeURIComponent(uploadId)}/summary`).then((value) => {
     const summary = value as RecordSummary;
     const charts = summary?.charts?.screen;
@@ -159,6 +169,7 @@ export async function getSignalMinuteCached(
   userId: string,
   options: { signal?: AbortSignal; requireCache?: boolean } = {},
 ) {
+  if (datasetMode) return getSignalMinute(uploadId, minute, mode, options.signal);
   try {
     const cached = await readSignalCache(userId, uploadId, runId, mode, minute);
     if (cached?.uploadId === uploadId && cached.minuteIndex === minute && cached.mode === mode) return cached;
@@ -179,6 +190,7 @@ export async function getSignalMinuteCached(
 }
 
 export async function getRecordTimelineCached(uploadId: string, runId: string, userId: string) {
+  if (datasetMode) return getRecordTimeline(uploadId);
   try {
     const cached = await readTimelineCache(userId, uploadId, runId);
     if (cached?.uploadId === uploadId && cached.runId === runId && cached.svg) return cached;
@@ -211,6 +223,7 @@ export async function downloadStudySignalsOffline(
   onProgress: (progress: OfflineSignalProgress) => void,
   signal?: AbortSignal,
 ) {
+  if (datasetMode) return;
   const identity = offlineDownloadKey(userId, uploadId, runId);
   const previous = offlineDownloads.get(identity);
   previous?.abort();

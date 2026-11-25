@@ -61,3 +61,10 @@ supabase/.temp/
 .vercel
 .env.local
 .env.*.local
+
+# Local research recordings
+/apnea-ecg-data-*.zip
+/apnea-ecg-data-*/
+/data/
+/model/*.pt
+/GCG.zip

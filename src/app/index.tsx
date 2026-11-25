@@ -1,3 +1,4 @@
+import { datasetMode } from '@/lib/local-dataset';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import Svg, { Path } from 'react-native-svg';
@@ -121,7 +122,7 @@ export default function HomeScreen() {
   const filters = filterLabels
     .map((label) => ({ label, count: label === 'All' ? allRecords.length : allRecords.filter((record) => record.status === label).length }))
     .filter((item) => item.label === 'All' || item.count > 0 || item.label === filter);
-  const visible = useMemo(() => allRecords.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [allRecords, filter, query]);
+  const visible = useMemo(() => allRecords.filter((record) => (filter === 'All' || record.status === filter) && `${record.id} ${datasetMode && ['archive-annotations', 'local-waveform'].includes(record.upload.latestRun?.model_id ?? '') && record.status === 'Analysis complete' ? 'Ready to review' : record.status}`.toLowerCase().includes(query.trim().toLowerCase())), [allRecords, filter, query]);
   const awaiting = records.filter((record) => record.status === 'Awaiting analysis').length;
 
   const open = (record: StudyRecord) => {
@@ -144,6 +145,7 @@ export default function HomeScreen() {
   const beginNew = () => { reset(); router.push('/upload'); };
 
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.page}>
+    {datasetMode ? <Text style={styles.copy}>Local ECG records and model results</Text> : null}
     <View style={[styles.greetingRow, wide && styles.greetingRowWide]}>
       <View style={styles.greeting}><Text style={styles.title}>Welcome, {displayName}</Text><Text style={styles.copy}>{loading ? 'Loading your studies…' : `${records.length} stored ${records.length === 1 ? 'study' : 'studies'} · ${awaiting} awaiting analysis`}</Text>{showingOfflineRecords ? <Text style={styles.subCopy}>Showing studies saved on this device; their latest status may be out of date.</Text> : null}</View>
       <View style={[styles.searchActions, wide && styles.searchActionsWide]}>
@@ -212,12 +214,12 @@ function StudyRow({ record, compact, onPress, canDelete, confirming, busy, onAsk
     </View>;
   }
   return <View style={styles.rowWrap}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${ownerName}, ${isOwner ? 'your patient' : 'shared patient'}, ${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${ownerName}, ${isOwner ? 'your patient' : 'shared patient'}, ${record.id}, ${record.age} years, ${record.sex}, ${record.detail}, ${datasetMode && ['archive-annotations', 'local-waveform'].includes(record.upload.latestRun?.model_id ?? '') && record.status === 'Analysis complete' ? 'Ready to review' : record.status}, ${record.ago}. Click for more detail.`} onPress={onPress} style={({ pressed }) => [styles.rowPress, styles.rowMain, pressed && styles.pressed]}>
       <View style={[styles.studyRow, compact && styles.studyRowCompact]}>
         <View style={styles.ownerNameRow}><View style={[styles.ownerNameBadge, isOwner && styles.ownerNameBadgeMine]}><Text style={[styles.ownerNameText, isOwner && styles.ownerNameTextMine]}>{ownerName}</Text></View></View>
         <View style={styles.identity}><Text style={styles.studyId}>{record.id}</Text><Text style={styles.subCopy}>{record.age} y · {record.sex} · {record.detail}</Text></View>
-        <View style={[styles.statusBadge, styles.pendingBadge]}><Text style={styles.statusBadgeText}>{record.status}</Text></View>
-        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: `${record.upload.latestRun?.progress_percent ?? (record.status === 'Analysis complete' ? 100 : 0)}%` }]} /></View></View>
+        <View style={[styles.statusBadge, styles.pendingBadge]}><Text style={styles.statusBadgeText}>{datasetMode && ['archive-annotations', 'local-waveform'].includes(record.upload.latestRun?.model_id ?? '') && record.status === 'Analysis complete' ? 'Ready to review' : record.status}</Text></View>
+        <View style={styles.statusBlock}><Text style={styles.rowStatus}>{datasetMode && ['archive-annotations', 'local-waveform'].includes(record.upload.latestRun?.model_id ?? '') && record.status === 'Analysis complete' ? 'Ready to review' : record.status}</Text><View style={styles.rowProgress}><View style={[styles.rowProgressFill, { width: `${record.upload.latestRun?.progress_percent ?? (record.status === 'Analysis complete' ? 100 : 0)}%` }]} /></View></View>
         <View style={styles.reviewBlock}><Text style={styles.reviewText}>{record.upload.latestRun?.status === 'completed' ? `${record.upload.latestRun.apnea_minutes ?? 0} / ${record.upload.latestRun.total_minutes ?? 0} apnea minutes` : 'WFDB recording'}</Text><Text style={styles.subCopy}>{record.ago}</Text></View>
       </View>
     </Pressable>

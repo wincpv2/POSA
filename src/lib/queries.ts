@@ -1,4 +1,5 @@
-import { supabase } from './supabase';
+import { archiveUploads, datasetMode, localRequest, uploadLocalStudy } from './local-dataset';
+import { getDatabaseUrl, getSupabase } from './supabase';
 
 // Patients open their links in the POSA app only, so every link the clinician
 // shares uses the app's own scheme (app.json "scheme"), whether it was
@@ -50,17 +51,18 @@ export type PredictionMinute = {
   run_id: string;
   minute_index: number;
   apnea_probability: number;
-  is_apnea: boolean;
+  is_apnea: boolean | null;
 };
 
 // RLS exposes every active study to signed-in clinicians; mutations remain owner-only.
 export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[]> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (datasetMode) return archiveUploads(limit);
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) return [];
 
-  const { data: uploads, error: uploadsError } = await supabase
+  const { data: uploads, error: uploadsError } = await getSupabase()
     .from('ecg_uploads')
     .select('id, record_code, status, created_at, patient_id, clinician_id, age_years, sampling_rate_hz, lead_configuration, original_filename, duration_seconds, patients(sex, bmi)')
     .order('created_at', { ascending: false })
@@ -71,7 +73,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
   // subject_code is per-clinician (clinician_patients), not on patients itself —
   // look up this clinician's own label for each patient in the list.
   const patientIds = [...new Set(uploads.map((row) => row.patient_id))];
-  const { data: relations, error: relationsError } = await supabase
+  const { data: relations, error: relationsError } = await getSupabase()
     .from('clinician_patients')
     .select('patient_id, subject_code')
     .eq('clinician_id', clinicianId)
@@ -82,7 +84,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
   // already fetched above. Keep the study list usable if the optional label fails.
   let ownerNames: { clinician_id: string; display_name: string }[] = [];
   try {
-    const { data, error } = await supabase.rpc('get_visible_study_owner_names', {
+    const { data, error } = await getSupabase().rpc('get_visible_study_owner_names', {
       p_upload_ids: uploads.map((row) => row.id),
     });
     if (!error) ownerNames = data ?? [];
@@ -90,7 +92,7 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
   const ownerNameByClinician = new Map<string, string>(ownerNames.map((row): [string, string] => [row.clinician_id, row.display_name]));
 
   const subjectCodeByPatient = new Map((relations ?? []).map((r) => [r.patient_id, r.subject_code]));
-  const { data: runs, error: runsError } = await supabase
+  const { data: runs, error: runsError } = await getSupabase()
     .from('prediction_runs')
     .select(predictionRunFields)
     .in('ecg_upload_id', uploads.map((row) => row.id))
@@ -120,7 +122,8 @@ export async function listRecentEcgUploads(limit = 10): Promise<RecentEcgUpload[
 }
 
 export async function getLatestPredictionRun(uploadId: string): Promise<PredictionRun | null> {
-  const { data, error } = await supabase.from('prediction_runs')
+  if (datasetMode) return (await archiveUploads(10000)).find((record) => record.id === uploadId)?.latestRun ?? null;
+  const { data, error } = await getSupabase().from('prediction_runs')
     .select(predictionRunFields)
     .eq('ecg_upload_id', uploadId).order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
@@ -128,7 +131,11 @@ export async function getLatestPredictionRun(uploadId: string): Promise<Predicti
 }
 
 export async function listPredictionMinutes(runId: string): Promise<PredictionMinute[]> {
-  const { data, error } = await supabase.from('prediction_minutes')
+  if (datasetMode) {
+    const prediction = await localRequest<{ minutes: PredictionMinute[] } | null>(`/predictions?run=${encodeURIComponent(runId)}`);
+    return prediction?.minutes ?? [];
+  }
+  const { data, error } = await getSupabase().from('prediction_minutes')
     .select('run_id, minute_index, apnea_probability, is_apnea')
     .eq('run_id', runId).order('minute_index');
   if (error) throw error;
@@ -145,7 +152,8 @@ export type EcgSymptomEvent = {
 };
 
 export async function listSymptomEvents(uploadId: string): Promise<EcgSymptomEvent[]> {
-  const { data, error } = await supabase
+  if (datasetMode) return [];
+  const { data, error } = await getSupabase()
     .from('ecg_symptom_events')
     .select('id, ecg_upload_id, occurred_at_seconds, symptoms, created_by, created_at')
     .eq('ecg_upload_id', uploadId)
@@ -166,12 +174,13 @@ export type RosterPatient = {
 // link to. Does NOT search/match patients across other clinicians (that's the
 // deliberately-deferred "matching flow" problem — see posa.md).
 export async function listMyPatients(): Promise<RosterPatient[]> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (datasetMode) return localRequest<RosterPatient[]>('/patients');
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) return [];
 
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('clinician_patients')
     .select('patient_id, subject_code, patients(sex, date_of_birth, bmi)')
     .eq('clinician_id', clinicianId)
@@ -200,7 +209,8 @@ export type NewPatientInput = {
 // clinician to it. Does not search for an existing match first — per the
 // deferred matching-flow decision, every "new patient" here is assumed new.
 export async function createPatientAndAttach(input: NewPatientInput): Promise<RosterPatient> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (datasetMode) return localRequest<RosterPatient>('/patients', input);
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
@@ -209,12 +219,12 @@ export async function createPatientAndAttach(input: NewPatientInput): Promise<Ro
   // new row to pass patients' SELECT policy, which only allows patients already
   // linked through clinician_patients — and the link is only created below.
   const patientId = crypto.randomUUID();
-  const { error: patientError } = await supabase
+  const { error: patientError } = await getSupabase()
     .from('patients')
     .insert({ id: patientId, owner_clinician_id: clinicianId, sex: input.sex ?? null, date_of_birth: input.dateOfBirth ?? null, bmi: input.bmi ?? null });
   if (patientError) throw patientError;
 
-  const { error: attachError } = await supabase.from('clinician_patients').insert({
+  const { error: attachError } = await getSupabase().from('clinician_patients').insert({
     clinician_id: clinicianId,
     patient_id: patientId,
     subject_code: input.subjectCode,
@@ -253,7 +263,8 @@ export type EcgStudyInput = {
 // own folder (required by the bucket's INSERT policy — see
 // 20260929000003_ecg_storage_bucket.sql), then records one ecg_uploads row.
 export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string; clinicianId: string }> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (datasetMode) return uploadLocalStudy(input);
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
@@ -265,14 +276,14 @@ export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string
     const response = await fetch(file.uri);
     const blob = await response.blob();
     const path = `${folder}/${file.name}`;
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await getSupabase().storage
       .from('ecg-files')
       .upload(path, blob, { contentType: file.mimeType ?? 'application/octet-stream' });
     if (uploadError) throw uploadError;
     paths.push(path);
   }
 
-  const { data, error: insertError } = await supabase
+  const { data, error: insertError } = await getSupabase()
     .from('ecg_uploads')
     .insert({
       patient_id: input.patientId,
@@ -292,7 +303,8 @@ export async function uploadEcgStudy(input: EcgStudyInput): Promise<{ id: string
 }
 
 export async function getEcgUploadOwner(uploadId: string): Promise<string> {
-  const { data, error } = await supabase.from('ecg_uploads')
+  if (datasetMode) return (await archiveUploads(10000)).find((record) => record.id === uploadId)?.clinicianId ?? 'physionet';
+  const { data, error } = await getSupabase().from('ecg_uploads')
     .select('clinician_id').eq('id', uploadId).single();
   if (error) throw error;
   return data.clinician_id;
@@ -302,11 +314,11 @@ export async function uploadEcgAnnotations(
   uploadId: string,
   files: { uri: string; name: string; mimeType?: string | null }[],
 ): Promise<void> {
-  const { data: auth, error: authError } = await supabase.auth.getUser();
+  const { data: auth, error: authError } = await getSupabase().auth.getUser();
   if (authError) throw authError;
   const userId = auth.user?.id;
   if (!userId) throw new Error('Sign in again before attaching annotations.');
-  const { data: study, error } = await supabase.from('ecg_uploads')
+  const { data: study, error } = await getSupabase().from('ecg_uploads')
     .select('clinician_id, storage_path').eq('id', uploadId).single();
   if (error) throw error;
   if (study.clinician_id !== userId) throw new Error('Only the clinician who uploaded this study can attach annotation files.');
@@ -328,7 +340,7 @@ export async function uploadEcgAnnotations(
     const response = await fetch(file.uri);
     if (!response.ok) throw new Error(`Could not read ${file.name}.`);
     const blob = await response.blob();
-    const { error: uploadError } = await supabase.storage.from('ecg-files').upload(
+    const { error: uploadError } = await getSupabase().storage.from('ecg-files').upload(
       `${folder}/${file.name}`,
       blob,
       { contentType: file.mimeType ?? 'application/octet-stream', upsert: true },
@@ -340,13 +352,13 @@ export async function uploadEcgAnnotations(
 // Soft delete: the row and its files are kept, it just stops appearing (see
 // 20261004000005_soft_delete_ecg_upload.sql). Only the uploader may do it.
 export async function softDeleteEcgUpload(uploadId: string): Promise<void> {
-  const { data, error } = await supabase.rpc('soft_delete_ecg_upload', { p_upload_id: uploadId });
+  const { data, error } = await getSupabase().rpc('soft_delete_ecg_upload', { p_upload_id: uploadId });
   if (error) throw error;
   if (!data) throw new Error('Only the clinician who uploaded this study can delete it.');
 }
 
 export async function restoreEcgUpload(uploadId: string): Promise<void> {
-  const { data, error } = await supabase.rpc('restore_ecg_upload', { p_upload_id: uploadId });
+  const { data, error } = await getSupabase().rpc('restore_ecg_upload', { p_upload_id: uploadId });
   if (error) throw error;
   if (!data) throw new Error('This study could not be restored.');
 }
@@ -370,13 +382,13 @@ export type ShareLink = { token: string; url: string; expiresAt: string };
 // patient's only credential, so it expires (30 days by default) and the
 // clinician can create a fresh one at any time.
 export async function createShareLink(ecgUploadId: string): Promise<ShareLink> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
 
   const token = (crypto.randomUUID() + crypto.randomUUID()).replaceAll('-', '');
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('study_share_links')
     .insert({ token, ecg_upload_id: ecgUploadId, created_by: clinicianId })
     .select('expires_at')
@@ -404,7 +416,7 @@ export type SharedStudy = {
 // Works without signing in: get_shared_study only returns the study for a
 // valid, unexpired, unrevoked token, and never the patient's identity.
 export async function getSharedStudy(token: string): Promise<SharedStudy | null> {
-  const { data, error } = await supabase.rpc('get_shared_study', { p_token: token });
+  const { data, error } = await getSupabase().rpc('get_shared_study', { p_token: token });
   if (error) throw error;
   const row = data?.[0];
   if (!row) return null;
@@ -445,13 +457,13 @@ export function tokenFromInput(input: string): string | null {
 // One link per patient. Valid 90 days by default; it keeps showing nights
 // uploaded after it was created.
 export async function createPatientDashboardLink(patientId: string): Promise<ShareLink> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
 
   const token = (crypto.randomUUID() + crypto.randomUUID()).replaceAll('-', '');
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('patient_share_links')
     .insert({ token, patient_id: patientId, created_by: clinicianId })
     .select('expires_at')
@@ -483,7 +495,7 @@ type DashboardJson = {
 
 // Works without signing in; null when the link is wrong, expired or revoked.
 export async function getPatientDashboard(token: string): Promise<PatientDashboard | null> {
-  const { data, error } = await supabase.rpc('get_patient_dashboard', { p_token: token });
+  const { data, error } = await getSupabase().rpc('get_patient_dashboard', { p_token: token });
   if (error) throw error;
   if (!data) return null;
   const json = data as unknown as DashboardJson;
@@ -506,12 +518,16 @@ export async function getPatientDashboard(token: string): Promise<PatientDashboa
 }
 
 export async function getPatientReportPdf(token: string, kind: PatientLink['kind'], download: boolean): Promise<{ available: boolean; url: string | null }> {
-  const { data, error } = await supabase.functions.invoke('patient-report-download', {
+  const { data, error } = await getSupabase().functions.invoke('patient-report-download', {
     body: { token, kind, download },
   });
   if (error) throw error;
   if (!data || typeof data.available !== 'boolean') throw new Error('Report status is unavailable.');
-  return { available: data.available, url: typeof data.url === 'string' ? data.url : null };
+  const path = typeof data.url === 'string' ? data.url : null;
+  if (path && !path.startsWith('/storage/v1/object/sign/report-pdfs/')) {
+    throw new Error('The report download URL is invalid.');
+  }
+  return { available: data.available, url: path ? `${getDatabaseUrl()}${path}` : null };
 }
 
 // ---- Clinician-written report (opinion, patient explanation, sign-off) ----
@@ -542,14 +558,15 @@ const toReport = (row: ReportRow): StudyReport => ({
 export const EMPTY_REPORT: StudyReport = { clinicianOpinion: '', patientExplanation: '', status: 'Draft', reviewedByName: null, reviewedAt: null, approvedByName: null, approvedAt: null };
 
 export async function getStudyReport(uploadId: string): Promise<StudyReport> {
-  const { data, error } = await supabase.from('study_reports').select(REPORT_COLUMNS).eq('ecg_upload_id', uploadId).maybeSingle();
+  if (datasetMode) return EMPTY_REPORT;
+  const { data, error } = await getSupabase().from('study_reports').select(REPORT_COLUMNS).eq('ecg_upload_id', uploadId).maybeSingle();
   if (error) throw error;
   return data ? toReport(data) : EMPTY_REPORT;
 }
 
 // Saves the text; the row is created on first save (always as draft).
 export async function saveStudyReportText(uploadId: string, text: { clinicianOpinion: string; patientExplanation: string }): Promise<StudyReport> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('study_reports')
     .upsert({ ecg_upload_id: uploadId, clinician_opinion: text.clinicianOpinion, patient_explanation: text.patientExplanation }, { onConflict: 'ecg_upload_id' })
     .select(REPORT_COLUMNS)
@@ -561,7 +578,7 @@ export async function saveStudyReportText(uploadId: string, text: { clinicianOpi
 // Moves the report one stage. Who signed and when is stamped by the database
 // (study_reports_sign_off trigger), which also enforces the rules.
 export async function setStudyReportStatus(uploadId: string, status: ReportStatus): Promise<StudyReport> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('study_reports')
     .update({ status: status.toLowerCase() })
     .eq('ecg_upload_id', uploadId)
@@ -576,7 +593,8 @@ export async function setStudyReportStatus(uploadId: string, status: ReportStatu
 export type SavedReportPdf = { id: string; storagePath: string; approvedByName: string | null; approvedAt: string | null; createdAt: string };
 
 export async function listReportPdfs(uploadId: string): Promise<SavedReportPdf[]> {
-  const { data, error } = await supabase
+  if (datasetMode) return [];
+  const { data, error } = await getSupabase()
     .from('report_pdfs')
     .select('id, storage_path, approved_by_name, approved_at, created_at')
     .eq('ecg_upload_id', uploadId)
@@ -590,13 +608,13 @@ export async function listReportPdfs(uploadId: string): Promise<SavedReportPdf[]
 // PDF per approval (report_pdfs_one_per_approval). An approval that is already
 // stored is skipped before anything is uploaded: returns 'already-saved'.
 export async function saveReportPdf(uploadId: string, recordCode: string, pdf: Blob, signed: { approvedByName: string | null; approvedAt: string | null }): Promise<'saved' | 'already-saved'> {
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  const { data: userData, error: userError } = await getSupabase().auth.getUser();
   if (userError) throw userError;
   const clinicianId = userData.user?.id;
   if (!clinicianId) throw new Error('Not signed in');
 
   if (!signed.approvedAt) throw new Error('The report is not approved.');
-  const { data: existing, error: existingError } = await supabase
+  const { data: existing, error: existingError } = await getSupabase()
     .from('report_pdfs')
     .select('id')
     .eq('ecg_upload_id', uploadId)
@@ -606,10 +624,10 @@ export async function saveReportPdf(uploadId: string, recordCode: string, pdf: B
   if (existing && existing.length > 0) return 'already-saved';
 
   const path = `${clinicianId}/${uploadId}/${Date.now()}-${recordCode || 'report'}.pdf`;
-  const { error: uploadError } = await supabase.storage.from('report-pdfs').upload(path, pdf, { contentType: 'application/pdf' });
+  const { error: uploadError } = await getSupabase().storage.from('report-pdfs').upload(path, pdf, { contentType: 'application/pdf' });
   if (uploadError) throw uploadError;
 
-  const { error } = await supabase.from('report_pdfs').insert({
+  const { error } = await getSupabase().from('report_pdfs').insert({
     ecg_upload_id: uploadId,
     storage_path: path,
     created_by: clinicianId,
@@ -624,7 +642,7 @@ export async function saveReportPdf(uploadId: string, recordCode: string, pdf: B
 
 // A short-lived link to open or download a saved PDF.
 export async function reportPdfUrl(storagePath: string): Promise<string> {
-  const { data, error } = await supabase.storage.from('report-pdfs').createSignedUrl(storagePath, 120, { download: true });
+  const { data, error } = await getSupabase().storage.from('report-pdfs').createSignedUrl(storagePath, 120, { download: true });
   if (error) throw error;
   return data.signedUrl;
 }
@@ -646,7 +664,8 @@ export type DeletionLogEntry = {
 // Entries for every patient this clinician is attached to, newest first
 // (20261004000009_deletion_log.sql).
 export async function getDeletionLog(limit = 200): Promise<DeletionLogEntry[]> {
-  const { data, error } = await supabase.rpc('get_deletion_log', { p_limit: limit });
+  if (datasetMode) return [];
+  const { data, error } = await getSupabase().rpc('get_deletion_log', { p_limit: limit });
   if (error) throw error;
   return (data ?? []).map((row) => ({
     id: row.id,

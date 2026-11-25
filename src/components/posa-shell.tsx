@@ -1,3 +1,4 @@
+import { datasetMode } from '@/lib/local-dataset';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Slot, router, usePathname } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -23,6 +24,7 @@ const icons = {
   processing: <><Circle cx="12" cy="12" r="9" /><Path d="M12 7v5l3 2" /></>,
   detail: <Path d="M3 12h4l3-7 4 14 3-7h4" />,
   summary: <><Path d="M6 3h9l4 4v14H6z" /><Path d="M15 3v5h4M9 12h7M9 16h7" /></>,
+  gcg: <><Circle cx="12" cy="12" r="9" /><Path d="M3 12h4l2-4 4 8 2-4h6" /></>,
 } as const;
 
 function NavIcon({ name, color }: { name: keyof typeof icons; color: string }) {
@@ -110,7 +112,7 @@ function Workspace() {
     : study.status === 'empty' || study.status === 'uploaded' ? '/upload'
       : study.status === 'processing' || study.status === 'failed' ? '/processing'
         : pathname === '/detail' ? '/summary' : '/detail';
-  const caseLine = study.studyId
+  const caseLine = pathname === '/gcg' ? 'GCG · Wrist motion sensor' : study.studyId
     ? `${study.studyId} · ${study.age ? `${study.age} y` : 'Age unavailable'} · ${study.sex || 'Sex unavailable'} · BMI ${study.bmi || '—'}`
     : 'Clinician workspace · No study selected';
 
@@ -136,7 +138,7 @@ function Workspace() {
       <View style={styles.caseChip}>
         <PosaText style={styles.case}>{caseLine}</PosaText>
       </View>
-      <View style={styles.notice}><PosaText style={styles.noticeText}>ECG recordings are stored privately. Analysis results are available for clinician review.</PosaText></View>
+      <View style={styles.notice}><PosaText style={styles.noticeText}>{pathname === '/gcg' ? 'Live sensor readings and simulated backup are labeled by source.' : 'ECG recordings are stored privately. Analysis results are available for clinician review.'}</PosaText></View>
     </View>
     <View style={styles.route}><Slot /></View>
     <View pointerEvents="box-none" style={styles.dockAnchor}>
@@ -154,10 +156,10 @@ function Workspace() {
           const iconName = item.href === '/' ? 'home' : item.href.slice(1) as keyof typeof icons;
           const label = active ? `${item.label}, current` : done ? `${item.label}, done` : upcoming ? `${item.label}, next required` : `${item.label}, upcoming`;
           return <Link key={item.href} href={blocked ? pathname as never : item.href} asChild>
-            <Pressable accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: active, disabled: blocked }} disabled={blocked} style={StyleSheet.flatten([styles.navButton, active && styles.navActive])}>
+            <Pressable accessibilityRole="link" accessibilityLabel={label} accessibilityState={{ selected: active, disabled: blocked }} disabled={blocked} style={StyleSheet.flatten([styles.navButton, width < 420 && styles.navCompact, active && styles.navActive])}>
               <NavIcon name={iconName} color={active ? colors.accentText : colors.text} />
               {done && !active ? <PosaText style={styles.homeDone}>✓</PosaText> : null}
-              {active ? <PosaText style={styles.navLabel}>{item.label}</PosaText> : upcoming && !done ? <View style={styles.nextDot} /> : null}
+              {active || (item.href === '/gcg' && width >= 600) ? <PosaText style={[styles.navLabel, !active && styles.navInactiveLabel]}>{item.label}</PosaText> : upcoming && !done ? <View style={styles.nextDot} /> : null}
             </Pressable>
           </Link>;
         })}
@@ -184,7 +186,7 @@ function ServerStatusMenu({ health, error, connection, loading, onClose, onRefre
       <View style={styles.menuDivider} />
       {row('Python inference API', apiOk, apiStatus)}
       {row('ML model', health?.model.ok, health ? `${health.model.name} · ${health.model.version}${health.model.device ? ` · ${health.model.device}` : ''}` : error || 'Waiting for status')}
-      {row('Supabase database', health?.supabase.ok, health ? health.supabase.ok ? 'Connected' : `Unavailable · ${health.supabase.error || 'query failed'}` : 'Waiting for status')}
+      {row(datasetMode ? 'Local SQLite storage' : 'Supabase database', health?.supabase.ok, health ? health.supabase.ok ? 'Connected' : `Unavailable · ${health.supabase.error || 'query failed'}` : 'Waiting for status')}
       {row('Prediction worker', health?.predictionWorker.ok, health ? `${health.predictionWorker.running} running · ${health.predictionWorker.queued} queued` : 'Waiting for status')}
       {row('Full-night summary worker', health?.summaryWorker.ok, health ? `${health.summaryWorker.running} running · ${health.summaryWorker.queued} queued` : 'Waiting for status')}
       {error ? <PosaText accessibilityRole="alert" style={styles.serverError}>{error}</PosaText> : null}
@@ -251,6 +253,8 @@ const styles = StyleSheet.create({
   menuItem: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, marginTop: 4, borderRadius: 14 }, menuItemPressed: { backgroundColor: colors.cyanSoft }, menuSignOut: { color: colors.coral, fontSize: 14, fontWeight: '800' }, menuLog: { color: colors.text, fontSize: 14, fontWeight: '700' },
   dockAnchor: { position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center', paddingHorizontal: 16, zIndex: 10 },
   dock: { width: '100%', maxWidth: 660, minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 4, padding: 8, borderRadius: 999, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.border, boxShadow: '0 10px 30px rgba(0,0,0,0.16)' },
+  navCompact: { minWidth: 36, paddingHorizontal: 4, gap: 4 },
+  navInactiveLabel: { color: colors.text },
   navButton: { minWidth: 48, minHeight: 48, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingHorizontal: 10 }, navActive: { flex: 1.7, backgroundColor: colors.accent }, navLabel: { color: colors.accentText, fontSize: 14, fontWeight: '800' },
   homeDone: { color: colors.accentText, backgroundColor: colors.accent, fontSize: 9, lineHeight: 13, fontWeight: '800', width: 13, height: 13, textAlign: 'center', borderRadius: 7, position: 'absolute', right: 5, bottom: 5, overflow: 'hidden' }, nextDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent, position: 'absolute', top: 7, right: 7 },
 });

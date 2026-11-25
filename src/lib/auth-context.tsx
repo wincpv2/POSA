@@ -1,54 +1,28 @@
-import * as AuthSession from 'expo-auth-session';
-import { getQueryParams } from 'expo-auth-session/build/QueryParams';
-import * as WebBrowser from 'expo-web-browser';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { Platform } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
 import { cancelOfflineSignalDownloads } from './inference';
 import { clearUserOfflineCache } from './offline-cache';
-import { supabase } from './supabase';
-
-// Completes the in-app browser session when the OAuth redirect lands back in the app.
-WebBrowser.maybeCompleteAuthSession();
-
-let completingOAuthSession: Promise<void> | null = null;
-
-export async function completeOAuthTokens(access_token: string, refresh_token: string) {
-  if (completingOAuthSession) return completingOAuthSession;
-
-  const pending = (async () => {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
-    if (data.session?.access_token === access_token) return;
-    const { error: sessionError } = await supabase.auth.setSession({ access_token, refresh_token });
-    if (sessionError) throw sessionError;
-  })();
-  completingOAuthSession = pending;
-  try { await pending; }
-  finally { if (completingOAuthSession === pending) completingOAuthSession = null; }
-}
-
-export async function completeOAuthRedirect(url: string) {
-  const { params, errorCode } = getQueryParams(url);
-  if (errorCode || params.error_description || params.error) {
-    throw new Error(params.error_description ?? params.error ?? errorCode ?? 'Sign-in failed');
-  }
-  const { access_token, refresh_token } = params;
-  if (!access_token || !refresh_token) throw new Error('Sign-in returned no session tokens');
-  await completeOAuthTokens(access_token, refresh_token);
-}
+import { archiveSession, datasetMode } from './local-dataset';
+import { getSupabase } from './supabase';
 
 type AuthContextValue = {
   session: Session | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
+  createAccount: (email: string, password: string, fullName: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  if (datasetMode) return <AuthContext.Provider value={{ session: archiveSession, loading: false, signIn: async () => {}, createAccount: async () => {}, signOut: async () => {} }}>{children}</AuthContext.Provider>;
+  return <DatabaseAuthProvider>{children}</DatabaseAuthProvider>;
+}
+
+function DatabaseAuthProvider({ children }: { children: ReactNode }) {
+  const supabase = getSupabase();
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -72,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => listener.subscription.unsubscribe();
-  }, []);
+  }, [supabase]);
 
   // Make sure the signed-in clinician has a profile row. The signup trigger only
   // runs once per account, so a deleted profile would otherwise never come back.
@@ -84,37 +58,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .from('profiles')
       .upsert({ id: userId, display_name: typeof fullName === 'string' ? fullName : null }, { onConflict: 'id', ignoreDuplicates: true })
       .then(({ error }) => { if (error) console.warn('Could not ensure profile:', error.message); });
-  }, [userId, fullName]);
+  }, [supabase, userId, fullName]);
 
-  async function signInWithGoogle() {
-    // matches app.json's "scheme": "posaapp" — must also be added to Supabase's
-    // Redirect URLs allow-list (Authentication > URL Configuration) as posaapp://auth/callback
-    const redirectTo = Platform.OS === 'web' && typeof window !== 'undefined'
-      ? new URL('/auth/callback', window.location.origin).toString()
-      : AuthSession.makeRedirectUri({ scheme: 'posaapp', path: 'auth/callback' });
+  async function signIn(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+  }
 
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo,
-        // On web, use a same-window redirect: opening an OAuth popup after this
-        // async request loses the original click gesture and browsers block it.
-        skipBrowserRedirect: Platform.OS !== 'web',
-        queryParams: { prompt: 'select_account' },
-      },
+  async function createAccount(email: string, password: string, fullName: string) {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName } },
     });
     if (error) throw error;
-    if (!data?.url) return;
-    if (Platform.OS === 'web') return;
-
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-    // The user closed the Google window themselves; not an error.
-    if (result.type === 'cancel' || result.type === 'dismiss') return;
-    if (result.type !== 'success' || !result.url) throw new Error(`Sign-in did not complete (${result.type})`);
-
-    // Supabase returns the tokens in the URL hash (#access_token=...), which
-    // Linking.parse ignores; getQueryParams reads both ?query and #hash.
-    await completeOAuthRedirect(result.url);
+    if (!data.session) throw new Error('Account created. Check the local auth settings for email confirmation before signing in.');
   }
 
   async function signOut() {
@@ -127,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, signInWithGoogle, signOut }}>
+    <AuthContext.Provider value={{ session, loading, signIn, createAccount, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -5,13 +5,12 @@ import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 
 import type { Database } from './database.types';
+import { localServiceUrl } from './local-service-url';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error(
-    'Missing EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY — copy .env.example to .env and fill in the values from the Supabase dashboard (Project Settings > Data API).'
+export function getDatabaseUrl() {
+  return localServiceUrl(
+    process.env.EXPO_PUBLIC_POSA_DATABASE_URL || 'http://127.0.0.1:54321',
+    'EXPO_PUBLIC_POSA_DATABASE_URL',
   );
 }
 
@@ -33,11 +32,23 @@ export const localDeviceStorage = {
   multiRemove: (keys: string[]) => (isServer ? Promise.resolve() : AsyncStorage.multiRemove(keys)),
 };
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    storage: localDeviceStorage,
-    autoRefreshToken: !isServer,
-    persistSession: !isServer,
-    detectSessionInUrl: false,
-  },
-});
+let client: ReturnType<typeof createClient<Database>> | undefined;
+
+export function getSupabase() {
+  if (client) return client;
+
+  const publishableKey = process.env.EXPO_PUBLIC_POSA_DATABASE_PUBLISHABLE_KEY?.trim();
+  if (!publishableKey) {
+    throw new Error('Set EXPO_PUBLIC_POSA_DATABASE_PUBLISHABLE_KEY in .env to the Publishable key from the local Supabase CLI.');
+  }
+
+  client = createClient<Database>(getDatabaseUrl(), publishableKey, {
+    auth: {
+      storage: localDeviceStorage,
+      autoRefreshToken: !isServer,
+      persistSession: !isServer,
+      detectSessionInUrl: false,
+    },
+  });
+  return client;
+}

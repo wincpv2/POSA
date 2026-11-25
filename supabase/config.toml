@@ -1,2 +1,27 @@
+project_id = "posa-local"
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+major_version = 17
+
+[db.seed]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:8081"
+enable_signup = true
+minimum_password_length = 8
+
+[auth.email]
+enabled = true
+enable_confirmations = false
+
+[auth.sms]
+enabled = false
+
 [functions.patient-report-download]
 verify_jwt = false

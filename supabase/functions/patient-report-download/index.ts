@@ -52,5 +52,7 @@ Deno.serve(async (request) => {
     console.error('Patient report signing failed:', signError?.message || 'missing URL');
     return json({ error: 'Report service is unavailable.' }, 503);
   }
-  return json({ available: true, url: signed.signedUrl });
+  // The CLI runs the function in Docker, where Storage can have an internal hostname.
+  const { pathname, search } = new URL(signed.signedUrl);
+  return json({ available: true, url: `${pathname}${search}` });
 });

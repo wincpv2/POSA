@@ -12,7 +12,7 @@ import { colors } from './posa-theme';
 
 type View_ = { kind: 'choose' } | { kind: 'clinician' } | { kind: 'patient' } | { kind: 'result' | 'dashboard'; token: string };
 
-// First screen when nobody is signed in: clinicians go on to Google sign-in;
+// First screen when nobody is signed in: clinicians use a local account;
 // patients open a result their clinician shared (QR code or link), no account.
 export default function RoleSelect() {
   const [view, setView] = useState<View_>({ kind: 'choose' });
@@ -32,7 +32,7 @@ export default function RoleSelect() {
       </View>
       <RoleCard
         title="I'm a clinician"
-        description="Sign in with Google to upload ECG studies and review results."
+        description="Sign in with your email to upload ECG studies and review results."
         icon={<><Circle cx="12" cy="8" r="4" /><Path d="M4 21c0-4 4-6 8-6s8 2 8 6" /><Path d="M17 4h4M19 2v4" /></>}
         onPress={() => setView({ kind: 'clinician' })}
       />

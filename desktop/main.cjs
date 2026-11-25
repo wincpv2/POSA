@@ -1,19 +1,11 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('node:path');
 
-const appUrl = 'https://posa-wincpv2s-projects.vercel.app';
-const appHost = new URL(appUrl).hostname;
-const supabaseHost = 'ydqmxjyqwvcbihrtdrnw.supabase.co';
+const appUrl = 'http://127.0.0.1:8081';
 
-function isAppOrSignInUrl(value) {
+function isAppUrl(value) {
   try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && (
-      url.hostname === appHost ||
-      url.hostname === supabaseHost ||
-      url.hostname === 'accounts.google.com' ||
-      url.hostname.endsWith('.google.com')
-    );
+    return new URL(value).origin === appUrl;
   } catch {
     return false;
   }
@@ -36,11 +28,11 @@ function createWindow() {
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isAppOrSignInUrl(url)) void shell.openExternal(url);
+    if (!isAppUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
-    if (!isAppOrSignInUrl(url)) {
+    if (!isAppUrl(url)) {
       event.preventDefault();
       void shell.openExternal(url);
     }
@@ -63,7 +55,7 @@ ipcMain.handle('posa:print-preview', (event) => {
 
 ipcMain.handle('posa:preview-report', async (event, html) => {
   const senderUrl = event.senderFrame?.url || event.sender.getURL();
-  if (!isAppOrSignInUrl(senderUrl) || new URL(senderUrl).hostname !== appHost) {
+  if (!isAppUrl(senderUrl)) {
     throw new Error('Printing is only available from POSA.');
   }
   if (typeof html !== 'string' || html.length > 8_000_000) {

@@ -20,7 +20,7 @@ function Gate() {
   const pathname = usePathname();
   // Patient links (dashboard /p/…, single study /shared/…) open for anyone,
   // signed in or not.
-  if (pathname === '/auth/callback' || pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
+  if (pathname.startsWith('/p/') || pathname.startsWith('/shared/')) return <Slot />;
   if (loading) return <Spinner />;
   return session ? <PosaShell /> : <RoleSelect />;
 }
@@ -33,5 +33,9 @@ export default function RootLayout() {
     [fonts.extraBold]: Nunito_800ExtraBold,
   });
   if (!loaded && !error) return <Spinner />;
-  return <GestureHandlerRootView style={{ flex: 1 }}><AuthProvider><Gate /></AuthProvider></GestureHandlerRootView>;
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AuthProvider><Gate /></AuthProvider>
+    </GestureHandlerRootView>
+  );
 }

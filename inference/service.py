@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import numpy as np
 import matplotlib
@@ -75,20 +76,39 @@ FEATURE_CACHE_MINUTES = 24
 MAX_QRS_WORKERS = 2
 
 
-def _settings() -> tuple[str, str, str, str]:
+def _settings() -> tuple[str, str, str]:
+    url = os.getenv("POSA_DATABASE_URL", "http://127.0.0.1:54321").strip()
+    local_url_error = (
+        "POSA_DATABASE_URL must be a local HTTP origin (127.0.0.1 or localhost)."
+    )
+    try:
+        endpoint = urlsplit(url)
+        port = endpoint.port
+    except ValueError as exc:
+        raise RuntimeError(local_url_error) from exc
+    if (
+        endpoint.scheme != "http"
+        or endpoint.hostname not in {"127.0.0.1", "localhost"}
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or endpoint.path not in {"", "/"}
+        or endpoint.query
+        or endpoint.fragment
+        or port == 0
+    ):
+        raise RuntimeError(local_url_error)
+
+    service_key = os.getenv("POSA_DATABASE_SERVICE_ROLE_KEY", "").strip()
+    if not service_key:
+        raise RuntimeError(
+            "Set POSA_DATABASE_SERVICE_ROLE_KEY in inference/.env to the local service role key."
+        )
     model_path = os.getenv("POSA_MODEL_PATH", "").strip()
-    url = (os.getenv("SUPABASE_URL") or os.getenv("EXPO_PUBLIC_SUPABASE_URL") or "").strip()
-    anon_key = (os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or "").strip()
-    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not model_path:
         raise RuntimeError("Set POSA_MODEL_PATH to the trained .pt checkpoint.")
     if not Path(model_path).is_file():
         raise RuntimeError(f"Model checkpoint not found at POSA_MODEL_PATH: {model_path}")
-    if not url or not anon_key:
-        raise RuntimeError("Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in the app .env file.")
-    if not service_key:
-        raise RuntimeError("Set SUPABASE_SERVICE_ROLE_KEY in the local server environment. Never add it to the Expo app.")
-    return model_path, url, anon_key, service_key
+    return model_path, f"http://{endpoint.netloc}", service_key
 
 
 def _storage_client() -> Client:
@@ -114,11 +134,15 @@ def _authorized_study(upload_id: str, token: str, require_owner: bool = False) -
     if user is None:
         raise HTTPException(status_code=401, detail="Your session expired. Sign in again.")
     app_metadata = user.app_metadata or {}
-    providers = app_metadata.get("providers") if isinstance(app_metadata, dict) else None
-    if (app_metadata.get("provider") if isinstance(app_metadata, dict) else None) != "google" and not (
-        isinstance(providers, list) and "google" in providers
-    ):
-        raise HTTPException(status_code=403, detail="Sign in with Google to access clinical studies.")
+    providers = app_metadata.get("providers")
+    has_email_provider = app_metadata.get("provider") == "email" or (
+        isinstance(providers, list) and "email" in providers
+    )
+    if not has_email_provider:
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in with a local email account to access clinical studies.",
+        )
 
     result = client.table("ecg_uploads").select(
         "id, patient_id, clinician_id, record_code, storage_path, original_filename, sampling_rate_hz, duration_seconds, deleted_at"
@@ -624,7 +648,7 @@ class torch_inference_context:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global model, device, admin, model_id, workers_ready
-    model_path, supabase_url, _, service_key = _settings()
+    model_path, supabase_url, service_key = _settings()
     model, device = load_model(model_path)
     admin = create_client(supabase_url, service_key)
     registered = admin.table("models").upsert({
@@ -649,10 +673,6 @@ app = FastAPI(title="POSA ECG Inference", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_origins=[
-        "https://posa-sandy.vercel.app",
-        "https://posa-wincpv2s-projects.vercel.app",
-    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],

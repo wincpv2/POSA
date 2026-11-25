@@ -1,3 +1,4 @@
+import { datasetMode } from '@/lib/local-dataset';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
@@ -7,7 +8,7 @@ import { EcgWaveform, RecordingOverview } from '@/components/ecg-monitor';
 import { useUploadState } from '@/components/posa-state';
 import { colors } from '@/components/posa-theme';
 import { useAuth } from '@/lib/auth-context';
-import { getRecordSummary, getRecordTimelineCached, getSignalMinuteCached, startRecordSummary, type RecordSummary, type RecordTimeline, type SignalMinute } from '@/lib/inference';
+import { startStudyAnalysis, getRecordSummary, getRecordTimelineCached, getSignalMinuteCached, startRecordSummary, type RecordSummary, type RecordTimeline, type SignalMinute } from '@/lib/inference';
 import { getEcgUploadOwner, getLatestPredictionRun, getStudyReport, listPredictionMinutes, uploadEcgAnnotations, type PredictionMinute, type PredictionRun } from '@/lib/queries';
 import { readStudyReviewCache, writeStudyReviewCache, type CachedStudyReview } from '@/lib/offline-cache';
 
@@ -351,19 +352,26 @@ export default function DetailScreen() {
       <View style={[styles.studyGrid, desktop && styles.studyGridDesktop]}>
       <View style={[styles.monitorColumn, desktop && styles.monitorColumnDesktop]}>
       {desktop ? <View style={styles.compactStats}><Text style={styles.chartHint}>Model apnea: {apneaMinutes} / {run.total_minutes ?? minutes.length} min · {apneaPercent.toFixed(1)}%</Text><Text style={styles.chartHint}>Estimated HR: {currentSignal?.estimatedBpm == null ? '— BPM' : `~${currentSignal.estimatedBpm} BPM`}</Text></View> : <View style={styles.stats}>
-        <Stat label="Predicted apnea minutes" value={`${apneaMinutes} / ${run.total_minutes ?? minutes.length}`} sub="Independent minute classifications" />
-        <Stat label="Predicted apnea proportion" value={`${apneaPercent.toFixed(1)}%`} sub="Apnea-classified ÷ analyzed minutes" />
+        <Stat label={datasetMode && run.model_id === 'archive-annotations' ? "Reference apnea minutes" : "Predicted apnea minutes"} value={datasetMode && run.model_id === 'archive-annotations' ? String(currentRecordSummary?.apneaLabelMinutes ?? "?") : `${apneaMinutes} / ${run.total_minutes ?? minutes.length}`} sub={datasetMode && run.model_id === 'archive-annotations' ? "Archived WFDB annotations" : "Independent minute classifications"} />
+        <Stat label="Predicted apnea proportion" value={datasetMode && run.model_id === 'archive-annotations' ? "?" : `${apneaPercent.toFixed(1)}%`} sub="Apnea-classified ÷ analyzed minutes" />
         <Stat label="Estimated heart rate" value={currentSignal?.estimatedBpm == null ? '— BPM' : `~${currentSignal.estimatedBpm} BPM`} sub="Approximate · derived from detected beats" />
       </View>}
 
-      <GlassPanel style={[styles.monitorPanel, desktop && styles.monitorPanelDesktop]}>
+      {datasetMode && study.uploadId ? <AppButton compact onPress={() => {
+      setError('');
+      void startStudyAnalysis(study.uploadId!).then((next) => {
+        update({ status: 'processing', runId: next.runId, progress: 0 });
+        router.push('/processing');
+      }).catch((reason) => setError(reason instanceof Error ? reason.message : 'Could not start local analysis.'));
+    }}><Text style={styles.buttonText}>Run local model</Text></AppButton> : null}
+    <GlassPanel style={[styles.monitorPanel, desktop && styles.monitorPanelDesktop]}>
         <View style={styles.headingRow}>
           <View style={styles.headingCopy}>
             <Text style={styles.heading}>ECG monitor</Text>
             <Text style={styles.copy}>{currentSignal?.lead || study.lead || 'ECG'} · {currentSignal?.unit || 'unit unavailable'} · {currentSignal?.samplingRateHz ?? study.sampleRate ?? 100} Hz</Text>
           </View>
           <View style={[styles.statusBadge, currentPrediction?.is_apnea ? styles.apneaBadge : styles.normalBadge]}>
-            <Text style={styles.statusText}>{currentPrediction ? currentPrediction.is_apnea ? 'MODEL · APNEA' : 'MODEL · NON-APNEA' : 'UNCLASSIFIED MINUTE'}</Text>
+            <Text style={styles.statusText}>{currentPrediction ? currentPrediction.is_apnea ? 'MODEL · APNEA' : 'MODEL · NON-APNEA' : datasetMode ? 'REFERENCE ANNOTATIONS' : 'UNCLASSIFIED MINUTE'}</Text>
           </View>
         </View>
         <View style={styles.controls}>
@@ -413,7 +421,7 @@ export default function DetailScreen() {
 
       <GlassPanel style={[styles.panel, desktop && styles.overviewPanelDesktop]}>
         <View style={styles.headingRow}>
-          <View style={styles.headingCopy}><Text style={styles.heading}>Recording overview</Text><Text style={styles.copy}>Full recording · click or tap to seek · {annotationsAvailable ? 'red = WFDB A annotations' : 'red = model predictions'}</Text></View>
+          <View style={styles.headingCopy}><Text style={styles.heading}>Recording overview</Text><Text style={styles.copy}>Full recording · click or tap to seek · {timeline?.source === 'model_prediction' ? 'red = model-predicted apnea (≥50%)' : annotationsAvailable ? 'red = WFDB A annotations' : 'red = model predictions'}</Text></View>
           <View style={styles.headingActions}>
             {annotationOwner && !reportLocked ? <AppButton compact variant="quiet" disabled={annotationBusy} onPress={() => { void attachAnnotations(); }}><Text style={styles.link}>{annotationBusy ? 'Attaching…' : 'Add WFDB annotations'}</Text></AppButton> : null}
           </View>

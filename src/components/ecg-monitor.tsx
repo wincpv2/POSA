@@ -18,7 +18,8 @@ const timeLabel = (seconds: number) => {
 type Interval = { startSeconds: number; endSeconds: number };
 
 type WaveformProps = {
-  signal: SignalMinute | null;
+  signal: Pick<SignalMinute, 'uploadId' | 'minuteIndex' | 'samples' | 'samplingRateHz' | 'unit' | 'rPeakSamples'> | null;
+  signalLabel?: string;
   signalPending: boolean;
   signalError: string;
   chartHeight?: number;
@@ -47,6 +48,7 @@ export function EcgWaveform(props: WaveformProps) {
     apneaIntervals, uploadId, selectedPeak, onSelectedPeak,
     onViewStart, onViewSeconds, onPlaying, onSeek,
   } = props;
+  const signalLabel = props.signalLabel ?? 'ECG';
   const [chartWidth, setChartWidth] = useState(0);
   const chartRef = useRef<View>(null);
   const chartWidthRef = useRef(0);
@@ -366,7 +368,7 @@ export function EcgWaveform(props: WaveformProps) {
     onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
     style={[styles.chart, props.chartFlex ? styles.chartFlex : styles.chartFixed, props.chartHeight ? { height: props.chartHeight, minHeight: 150 } : null]}
     accessibilityRole="image"
-    accessibilityLabel={`ECG waveform for minute ${currentMinute + 1}. Scroll to zoom, drag horizontally to pan, tap near an R peak to inspect it.`}
+    accessibilityLabel={`${signalLabel} waveform for minute ${currentMinute + 1}. Scroll to zoom, drag horizontally to pan.`}
   >
     {plotted ? <Svg width="100%" height="100%" viewBox="0 0 1000 320" preserveAspectRatio="none">
       <Rect width="1000" height="320" fill="#102333" />
@@ -381,7 +383,7 @@ export function EcgWaveform(props: WaveformProps) {
       <SvgText x={5} y={plot.top + 5} fill="#B5CAD6" fontSize="11">{plotted.high.toFixed(2)} {signal?.unit || 'relative'}</SvgText>
       <SvgText x={5} y={plot.bottom} fill="#B5CAD6" fontSize="11">{plotted.low.toFixed(2)} {signal?.unit || 'relative'}</SvgText>
     </Svg> : signalPending ? <ActivityIndicator color="#49E3A0" /> : <View style={styles.chartError}>
-      <Text style={styles.chartMessage}>{signalError || 'No ECG samples available for this time.'}</Text>
+      <Text style={styles.chartMessage}>{signalError || `No ${signalLabel} samples available for this time.`}</Text>
       {signalError ? <AppButton compact variant="quiet" onPress={onRetry}><Text style={styles.link}>Retry signal</Text></AppButton> : null}
     </View>}
   </View>;

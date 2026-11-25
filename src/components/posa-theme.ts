@@ -30,6 +30,7 @@ export const navItems = [
   { href: '/processing', label: 'Processing' },
   { href: '/detail', label: 'Detail' },
   { href: '/summary', label: 'Summary' },
+  { href: '/gcg', label: 'GCG' },
 ] as const;
 
 export type PosaRoute = (typeof navItems)[number]['href'];
